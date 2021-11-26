@@ -189,14 +189,6 @@ class ProgramCtffind:
         paramDict.update(kwargs)
         return self._program, self._args % paramDict
 
-    def parseOutput(self, filename):
-        """ Retrieve defocus U, V and angle from the
-        output file of the program execution.
-        :param filename: input file to parse
-        :return: a tuple of CTF values
-        """
-        return parseCtffind4Output(filename)
-
     def parseOutputAsCtf(self, filename, psdFile=None):
         """ Parse the output file and build the CTFModel object
         with the values.
@@ -257,6 +249,10 @@ no
 no
 eof\n
 """
+        if hasattr(protocol, 'inputIsStack') and protocol.inputIsStack:
+            args = args.replace('%(micFn)s',
+                                '%(micFn)s\n'
+                                'No')
 
         if protocol.usePowerSpectra:
             args = args.replace('<< eof > %(ctffindOut)s',

@@ -105,15 +105,14 @@ def parseCtffind4Output(filename):
     """ Retrieve defocus U, V and angle from the
     output file of the ctffind4 execution.
     :param filename: input file to parse
-    :return: a tuple of CTF values
+    :return: a list of tuples of CTF values
     """
-    result = None
+    result = []
     if os.path.exists(filename):
         with open(filename) as f:
             for line in f:
                 if not line.startswith("#"):
-                    result = tuple(map(float, line.split()[1:7]))
-                    break
+                    result.append(tuple(map(float, line.split()[1:7])))
     else:
         print("Warning: Missing file: ", filename)
     return result
@@ -134,11 +133,11 @@ def readCtfModel(ctfModel, filename):
     :param filename: input file to parse
     """
     result = parseCtffind4Output(filename)
-    if result is None:
+    if not result:
         setWrongDefocus(ctfModel)
         ctfFit, ctfResolution, ctfPhaseShift = -999, -999, 0
     else:
-        defocusU, defocusV, defocusAngle, ctfPhaseShift, ctfFit, ctfResolution = result
+        defocusU, defocusV, defocusAngle, ctfPhaseShift, ctfFit, ctfResolution = result[0]
         ctfModel.setStandardDefocus(defocusU, defocusV, defocusAngle)
     ctfModel.setFitQuality(ctfFit)
     ctfModel.setResolution(ctfResolution)
@@ -147,6 +146,29 @@ def readCtfModel(ctfModel, filename):
     ctfPhaseShiftDeg = np.rad2deg(ctfPhaseShift)
     if ctfPhaseShiftDeg != 0:
         ctfModel.setPhaseShift(ctfPhaseShiftDeg)
+
+
+def readCtfModels(ctfModels, filename):
+    """ Set values for multiple ctfModels (when processing a stack).
+    :param ctfModels: output CTF models
+    :param filename: input file to parse
+    """
+    result = parseCtffind4Output(filename)
+
+    for i, ctfModel in enumerate(ctfModels):
+        if not result:
+            setWrongDefocus(ctfModel)
+            ctfFit, ctfResolution, ctfPhaseShift = -999, -999, 0
+        else:
+            defocusU, defocusV, defocusAngle, ctfPhaseShift, ctfFit, ctfResolution = result[i]
+            ctfModel.setStandardDefocus(defocusU, defocusV, defocusAngle)
+        ctfModel.setFitQuality(ctfFit)
+        ctfModel.setResolution(ctfResolution)
+
+        # Avoid creation of phaseShift
+        ctfPhaseShiftDeg = np.rad2deg(ctfPhaseShift)
+        if ctfPhaseShiftDeg != 0:
+            ctfModel.setPhaseShift(ctfPhaseShiftDeg)
 
 
 def readShiftsMovieAlignment(shiftFn):
