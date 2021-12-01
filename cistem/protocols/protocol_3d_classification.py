@@ -55,8 +55,10 @@ class CistemProt3DClassification(ProtClassify3D):
 
         form.addSection(label='Refinement')
         form.addParam('cycleCount', IntParam, label='Cycle Count',
-                        help='Number of refinement cycles to be executed')
-        form.addParam('refinement_type', EnumParam, choices=['Global', 'Local'], label='Refinement type')
+                        help='Number of refinement cycles to be executed',
+                        default=1)
+        form.addParam('refinement_type', EnumParam, choices=['Local', 'Global'], label='Refinement type',
+                        default=0)
         group = form.addLine('Refinement parameters', help='Parameters to be refined',
                                 expertLevel=LEVEL_ADVANCED)
         group.addParam('refine_psi', BooleanParam, label='ψ',
@@ -79,7 +81,8 @@ class CistemProt3DClassification(ProtClassify3D):
                         default=0.0, expertLevel=LEVEL_ADVANCED)
         form.addParam('refine_usedPercentage', FloatParam, label='Percentage used (%)',
                         default=100.0, expertLevel=LEVEL_ADVANCED)
-        group = form.addGroup('Global search', expertLevel=LEVEL_ADVANCED)
+        group = form.addGroup('Global search', expertLevel=LEVEL_ADVANCED,
+                                condition='refinement_type == 1')
         group.addParam('refine_globalMaskRadius', FloatParam, label='Global mask radius (Å)',
                         default=120.0, expertLevel=LEVEL_ADVANCED)
         group.addParam('refine_numResults', IntParam, label='Number of results to refine',
@@ -100,54 +103,51 @@ class CistemProt3DClassification(ProtClassify3D):
         form.addParam('classification_enableFocus', BooleanParam, label='Enable focused classification',
                         default=False, expertLevel=LEVEL_ADVANCED)
         group = form.addLine('Focus sphere', 
+                                condition='classification_enableFocus is True',
                                 help='Sphere on which the classification will be focussed', 
                                 expertLevel=LEVEL_ADVANCED)
         group.addParam('classification_sphereX', FloatParam, label='Center X (Å)',
-                        condition='classification_enableFocus is True',
                         default=0, expertLevel=LEVEL_ADVANCED)
         group.addParam('classification_sphereY', FloatParam, label='Center Y (Å)',
-                        condition='classification_enableFocus is True',
                         default=0, expertLevel=LEVEL_ADVANCED)
         group.addParam('classification_sphereZ', FloatParam, label='Center Z (Å)',
-                        condition='classification_enableFocus is True',
                         default=0, expertLevel=LEVEL_ADVANCED)
         group.addParam('classification_radius', FloatParam, label='Radius (Å)',
-                        condition='classification_enableFocus is True',
                         default=10.0, expertLevel=LEVEL_ADVANCED)
 
 
         form.addSection(label='CTF refinement')
         form.addParam('ctf_enable', BooleanParam, label='Refine CTF',
                         default=False, expertLevel=LEVEL_ADVANCED)
-        group.addParam('ctf_range', FloatParam, label='Defocus search range (Å)',
+        form.addParam('ctf_range', FloatParam, label='Defocus search range (Å)',
                         condition='ctf_enable is True',
                         default=500.0, expertLevel=LEVEL_ADVANCED)
-        group.addParam('ctf_step', FloatParam, label='Defocus search step (Å)',
+        form.addParam('ctf_step', FloatParam, label='Defocus search step (Å)',
                         condition='ctf_enable is True',
                         default=50.0, expertLevel=LEVEL_ADVANCED)
 
 
         form.addSection(label='Reconstruction')
-        group.addParam('reconstruction_score2weight', FloatParam, label='Score to weight constant (Å²)',
+        form.addParam('reconstruction_score2weight', FloatParam, label='Score to weight constant (Å²)',
                         default=2.0, expertLevel=LEVEL_ADVANCED)
-        group.addParam('reconstruction_adjustScore4Defocus', BooleanParam, label='Adjust score for defocus',
+        form.addParam('reconstruction_adjustScore4Defocus', BooleanParam, label='Adjust score for defocus',
                         default=True, expertLevel=LEVEL_ADVANCED)
-        group.addParam('reconstruction_scoreThreshold', FloatParam, label='Score threshold',
+        form.addParam('reconstruction_scoreThreshold', FloatParam, label='Score threshold',
                         default=0.0, expertLevel=LEVEL_ADVANCED)
-        group.addParam('reconstruction_resLimit', FloatParam, label='Resolution limit (Å²)',
+        form.addParam('reconstruction_resLimit', FloatParam, label='Resolution limit (Å²)',
                         default=0.0, expertLevel=LEVEL_ADVANCED)
-        group.addParam('reconstruction_enableAutoCrop', BooleanParam, label='Enable auto cropping images',
+        form.addParam('reconstruction_enableAutoCrop', BooleanParam, label='Enable auto cropping images',
                         default=False, expertLevel=LEVEL_ADVANCED)
-        group.addParam('reconstruction_enableLikelihoodBlurring', BooleanParam, label='Enable likelihood blurring',
+        form.addParam('reconstruction_enableLikelihoodBlurring', BooleanParam, label='Enable likelihood blurring',
                         default=False, expertLevel=LEVEL_ADVANCED)
-        group.addParam('reconstruction_smoothingFactor', FloatParam, label='Smoothing factor',
+        form.addParam('reconstruction_smoothingFactor', FloatParam, label='Smoothing factor',
                         condition='reconstruction_enableLikelihoodBlurring is True',
                         default=10.0, expertLevel=LEVEL_ADVANCED)
 
 
         form.addSection(label='Masking')
         form.addParam('masking_enableAuto', BooleanParam, label='Use auto masking',
-                        default=False)
+                        default=True)
         form.addParam('masking_volume', PointerParam, pointerClass='VolumeMask', label='Mask',
                         help='3D mask used to crop the output volume',
                         condition='masking_enableAuto is False', default=None)
