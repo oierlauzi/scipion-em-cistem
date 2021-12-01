@@ -22,11 +22,10 @@
 # *
 # **************************************************************************
 
+from pyworkflow.protocol.constants import LEVEL_ADVANCED
+from pyworkflow.protocol.params import EnumParam, MultiPointerParam, PointerParam, FloatParam, IntParam, BooleanParam, StringParam
 from pwem.protocols import ProtClassify3D
 from pyworkflow.constants import BETA
-
-from cistem import Plugin
-
 
 class CistemProt3DClassification(ProtClassify3D):
     """ Classify particles into 3d classes """
@@ -35,18 +34,149 @@ class CistemProt3DClassification(ProtClassify3D):
 
     def __init__(self, **args):
         ProtClassify3D.__init__(self, **args)
+        self._createFilenames()
 
+    def _createFilenames(self):
+        """ Centralize the names of the files. """
+        myDict = {
+            'parameters': 'c3d.par',
+        }
+        self._updateFilenamesDict(myDict)
     # --------------------------- DEFINE param functions ----------------------
     def _defineParams(self, form):
-        # form.addParam()
-        pass
+        # TODO add help
+        form.addSection(label='Input')
+        form.addParam('input_particles', PointerParam, pointerClass='SetOfParticles', label='Input particles',
+                        help='Particles to be classified')
+        form.addParam('input_initialVolumes', MultiPointerParam, pointerClass='Volume', label='Initial volumes',
+                        help='Initial volumes that serve as a reference for the classification. '
+                        'Classification will output a disctinct class for each of these volumes')
+
+
+        form.addSection(label='Refinement')
+        form.addParam('cycleCount', IntParam, label='Cycle Count',
+                        help='Number of refinement cycles to be executed')
+        form.addParam('refinement_type', EnumParam, choices=['Global', 'Local'], label='Refinement type')
+        group = form.addLine('Refinement parameters', help='Parameters to be refined',
+                                expertLevel=LEVEL_ADVANCED)
+        group.addParam('refine_psi', BooleanParam, label='ψ',
+                        default=True, expertLevel=LEVEL_ADVANCED)
+        group.addParam('refine_theta', BooleanParam, label='θ',
+                        default=True, expertLevel=LEVEL_ADVANCED)
+        group.addParam('refine_phi', BooleanParam, label='φ',
+                        default=True, expertLevel=LEVEL_ADVANCED)
+        group.addParam('refine_xShift', BooleanParam, label='X shift',
+                        default=True, expertLevel=LEVEL_ADVANCED)
+        group.addParam('refine_yShift', BooleanParam, label='Y shift',
+                        default=True, expertLevel=LEVEL_ADVANCED)
+        form.addParam('refine_lowResLimit', FloatParam, label='Low resolution limit (Å)',
+                        default=225.0, expertLevel=LEVEL_ADVANCED)
+        form.addParam('refine_outerMaskRadius', FloatParam, label='Outer mask radius (Å)',
+                        default=97.5, expertLevel=LEVEL_ADVANCED)
+        form.addParam('refine_innerMaskRadius', FloatParam, label='Inner mask radius (Å)',
+                        default=0.0, expertLevel=LEVEL_ADVANCED)
+        form.addParam('refine_signedCcResLimit', FloatParam, label='Signed CC resolution limit (Å)',
+                        default=0.0, expertLevel=LEVEL_ADVANCED)
+        form.addParam('refine_usedPercentage', FloatParam, label='Percentage used (%)',
+                        default=100.0, expertLevel=LEVEL_ADVANCED)
+        group = form.addGroup('Global search', expertLevel=LEVEL_ADVANCED)
+        group.addParam('refine_globalMaskRadius', FloatParam, label='Global mask radius (Å)',
+                        default=120.0, expertLevel=LEVEL_ADVANCED)
+        group.addParam('refine_numResults', IntParam, label='Number of results to refine',
+                        default=20, expertLevel=LEVEL_ADVANCED)
+        group.addParam('refine_refineInputParameters', BooleanParam, label='Refine input parameters',
+                        default=True, expertLevel=LEVEL_ADVANCED)
+        group.addParam('refine_angularStep', FloatParam, label='Angular search step (º)',
+                        default=35.26, expertLevel=LEVEL_ADVANCED)
+        group.addParam('refine_xRange', FloatParam, label='Search range in X (Å)',
+                        default=22.5, expertLevel=LEVEL_ADVANCED)
+        group.addParam('refine_yRange', FloatParam, label='Search range in Y (Å)',
+                        default=22.5, expertLevel=LEVEL_ADVANCED)
+
+
+        form.addSection(label='Classification')
+        form.addParam('classification_hiresLimit', FloatParam, label='High Resolution Limit (Å)',
+                        default=30.0)
+        form.addParam('classification_enableFocus', BooleanParam, label='Enable focused classification',
+                        default=False, expertLevel=LEVEL_ADVANCED)
+        group = form.addLine('Focus sphere', 
+                                help='Sphere on which the classification will be focussed', 
+                                expertLevel=LEVEL_ADVANCED)
+        group.addParam('classification_sphereX', FloatParam, label='Center X (Å)',
+                        condition='classification_enableFocus is True',
+                        default=0, expertLevel=LEVEL_ADVANCED)
+        group.addParam('classification_sphereY', FloatParam, label='Center Y (Å)',
+                        condition='classification_enableFocus is True',
+                        default=0, expertLevel=LEVEL_ADVANCED)
+        group.addParam('classification_sphereZ', FloatParam, label='Center Z (Å)',
+                        condition='classification_enableFocus is True',
+                        default=0, expertLevel=LEVEL_ADVANCED)
+        group.addParam('classification_radius', FloatParam, label='Radius (Å)',
+                        condition='classification_enableFocus is True',
+                        default=10.0, expertLevel=LEVEL_ADVANCED)
+
+
+        form.addSection(label='CTF refinement')
+        form.addParam('ctf_enable', BooleanParam, label='Refine CTF',
+                        default=False, expertLevel=LEVEL_ADVANCED)
+        group.addParam('ctf_range', FloatParam, label='Defocus search range (Å)',
+                        condition='ctf_enable is True',
+                        default=500.0, expertLevel=LEVEL_ADVANCED)
+        group.addParam('ctf_step', FloatParam, label='Defocus search step (Å)',
+                        condition='ctf_enable is True',
+                        default=50.0, expertLevel=LEVEL_ADVANCED)
+
+
+        form.addSection(label='Reconstruction')
+        group.addParam('reconstruction_score2weight', FloatParam, label='Score to weight constant (Å²)',
+                        default=2.0, expertLevel=LEVEL_ADVANCED)
+        group.addParam('reconstruction_adjustScore4Defocus', BooleanParam, label='Adjust score for defocus',
+                        default=True, expertLevel=LEVEL_ADVANCED)
+        group.addParam('reconstruction_scoreThreshold', FloatParam, label='Score threshold',
+                        default=0.0, expertLevel=LEVEL_ADVANCED)
+        group.addParam('reconstruction_resLimit', FloatParam, label='Resolution limit (Å²)',
+                        default=0.0, expertLevel=LEVEL_ADVANCED)
+        group.addParam('reconstruction_enableAutoCrop', BooleanParam, label='Enable auto cropping images',
+                        default=False, expertLevel=LEVEL_ADVANCED)
+        group.addParam('reconstruction_enableLikelihoodBlurring', BooleanParam, label='Enable likelihood blurring',
+                        default=False, expertLevel=LEVEL_ADVANCED)
+        group.addParam('reconstruction_smoothingFactor', FloatParam, label='Smoothing factor',
+                        condition='reconstruction_enableLikelihoodBlurring is True',
+                        default=10.0, expertLevel=LEVEL_ADVANCED)
+
+
+        form.addSection(label='Masking')
+        form.addParam('masking_enableAuto', BooleanParam, label='Use auto masking',
+                        default=False)
+        form.addParam('masking_volume', PointerParam, pointerClass='VolumeMask', label='Mask',
+                        help='3D mask used to crop the output volume',
+                        condition='masking_enableAuto is False', default=None)
+        form.addParam('masking_edgeWidth', FloatParam, label='Edge width (Å)',
+                        condition='masking_volume is not None', default=10.0,
+                        expertLevel=LEVEL_ADVANCED)
+        form.addParam('masking_outsideWeight', FloatParam, label='Outside weight',
+                        condition='masking_volume is not None', default=0.0,
+                        expertLevel=LEVEL_ADVANCED)
+        form.addParam('masking_enableLpfOutsideMask', BooleanParam, label='Use a LPF outside the mask',
+                        condition='masking_volume is not None', default=False,
+                        expertLevel=LEVEL_ADVANCED)
+        form.addParam('masking_lpfResolution', FloatParam, label='LPF resolution (Å)',
+                        condition='masking_enableLpfOutsideMask is True', default=20.0,
+                        expertLevel=LEVEL_ADVANCED)
+
 
     # --------------------------- INSERT steps functions ----------------------
     def _insertAllSteps(self):
         self._insertFunctionStep("createOutputStep")
 
     # --------------------------- STEPS functions -----------------------------
-    def firstStep(self):
+    def refineStep(self, i):
+        pass
+
+    def reconstructStep(self, i):
+        pass
+
+    def mergeStep(self, i):
         pass
 
     def createOutputStep(self):
