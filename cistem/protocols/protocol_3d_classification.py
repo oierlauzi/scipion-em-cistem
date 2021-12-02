@@ -60,7 +60,7 @@ class CistemProt3DClassification(ProtClassify3D):
                         default=1, validators=[GE(1)])
         form.addParam('refinement_type', EnumParam, choices=['Local', 'Global'], label='Refinement type',
                         default=0)
-        group = form.addLine('Refinement parameters', help='Parameters to be refined',
+        group = form.addGroup('Refinement parameters', help='Parameters to be refined',
                                 expertLevel=LEVEL_ADVANCED)
         group.addParam('refine_psi', BooleanParam, label='ψ',
                         default=True, expertLevel=LEVEL_ADVANCED)
@@ -103,7 +103,7 @@ class CistemProt3DClassification(ProtClassify3D):
                         default=30.0, validators=[GT(0)])
         form.addParam('classification_enableFocus', BooleanParam, label='Enable focused classification',
                         default=False, expertLevel=LEVEL_ADVANCED)
-        group = form.addLine('Focus sphere', 
+        group = form.addGroup('Focus sphere', 
                                 condition='classification_enableFocus is True',
                                 help='Sphere on which the classification will be focussed', 
                                 expertLevel=LEVEL_ADVANCED)
