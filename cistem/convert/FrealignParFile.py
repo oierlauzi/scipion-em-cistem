@@ -1,5 +1,4 @@
-import math 
-import numpy as np
+import math
 
 class FrealignParFileBase(object):
     COMMENT_TOKEN = 'C'
@@ -19,20 +18,10 @@ class FrealignParFileBase(object):
         """ Convert a line into a dict with _header as keys.
         :return: yield a dict - single row
         """
-        # Generate an array of key-values (name of the columns)
-        keys = [c['name'] for c in self._columns]
-        
         for line in self._file:
             line = line.strip()
             if not line.startswith(self.COMMENT_TOKEN): # Skip comments
-                values = line.split()
-
-                # Ensure that keys and values are matched
-                if len(keys) != len(values):
-                    raise ValueError('Invalid line read: '+line)
-
-                # All ok, build a dictionary with the key-value pairs
-                yield dict(zip(keys, values))
+                yield self._parseLine(line)
 
     def writeRow(self, row):
         if isinstance(row, list):
@@ -41,7 +30,7 @@ class FrealignParFileBase(object):
                 raise ValueError('The row has an invalid amount of columns')
 
             # Format the row
-            row = [column['format'] % value for (column, value) in zip(self._columns, row)]
+            row = [column['format'].format(value) for (column, value) in zip(self._columns, row)]
 
             # Merge all the columns into a line
             line = self.COLUMN_SEPARATOR.join(row) + '\n'
@@ -67,13 +56,28 @@ class FrealignParFileBase(object):
     def close(self):
         self._file.close()
 
+    def _parseLine(self, line):
+        # Obtain the key and tokens arrays
+        keys = [c['name'] for c in self._columns]
+        tokens = line.split()
+
+        # Ensure that keys and tokens are matched
+        if len(keys) != len(tokens):
+            raise ValueError('Invalid line read: '+line)
+
+        # Type the tokens to obtain the values
+        values = [column['type'](token) for (column, token) in zip(self._columns, tokens)]
+
+        # All ok, build a dictionary with the key-value pairs
+        return dict(zip(keys, values))
+
 
 class MinimalFrealignParFile(FrealignParFileBase):
     COLUMNS = [
-        { 'name': 'mic_id',         'header': '  ',         'format': '%4d'},
-        { 'name': 'defocus_u',      'header': 'DF1     ',   'format': '%8.2f'},
-        { 'name': 'defocus_v',      'header': 'DF2     ',   'format': '%8.2f'},
-        { 'name': 'defocus_angle',  'header': 'ANGAST  ',   'format': '%8.2f'},
+        { 'name': 'mic_id',         'header': '  ',         'format': '{:<4d}',     'type': int},
+        { 'name': 'defocus_u',      'header': 'DF1     ',   'format': '{:<8.2f}',   'type': float},
+        { 'name': 'defocus_v',      'header': 'DF2     ',   'format': '{:<8.2f}',   'type': float},
+        { 'name': 'defocus_angle',  'header': 'ANGAST  ',   'format': '{:<8.2f}',   'type': float},
     ]
 
     def __init__(self, path, mode):
@@ -110,23 +114,23 @@ class MinimalFrealignParFile(FrealignParFileBase):
 
 class FullFrealignParFile(FrealignParFileBase):
     COLUMNS = [
-        { 'name': 'mic_id',         'header': '  ',         'format': '%4d'},
-        { 'name': 'psi',            'header': 'PSI     ',   'format': '%8.2f'},
-        { 'name': 'theta',          'header': 'THETA   ',   'format': '%8.2f'},
-        { 'name': 'phi',            'header': 'PHI     ',   'format': '%8.2f'},
-        { 'name': 'shift_x',        'header': 'SHX     ',   'format': '%8.2f'},
-        { 'name': 'shift_y',        'header': 'SHY     ',   'format': '%8.2f'},
-        { 'name': 'magnification',  'header': 'MAG     ',   'format': '%8.2f'},
-        { 'name': 'film',           'header': 'FILM',       'format': '%4d'},
-        { 'name': 'defocus_u',      'header': 'DF1     ',   'format': '%8.2f'},
-        { 'name': 'defocus_v',      'header': 'DF2     ',   'format': '%8.2f'},
-        { 'name': 'defocus_angle',  'header': 'ANGAST  ',   'format': '%8.2f'},
-        { 'name': 'p_shift',        'header': 'PSHIFT  ',   'format': '%8.2f'},
-        { 'name': 'occupancy',      'header': 'OCC     ',   'format': '%8.2f'},
-        { 'name': 'log_p',          'header': 'LOGP    ',   'format': '%8d'},
-        { 'name': 'sigma',          'header': 'SIGMA   ',   'format': '%8.2f'},
-        { 'name': 'score',          'header': 'SCORE   ',   'format': '%8.2f'},
-        { 'name': 'change',         'header': 'CHANGE  ',   'format': '%8.2f'},
+        { 'name': 'mic_id',         'header': '  ',         'format': '{:<4d}',     'type': int},
+        { 'name': 'psi',            'header': 'PSI     ',   'format': '{:<8.2f}',   'type': float},
+        { 'name': 'theta',          'header': 'THETA   ',   'format': '{:<8.2f}',   'type': float},
+        { 'name': 'phi',            'header': 'PHI     ',   'format': '{:<8.2f}',   'type': float},
+        { 'name': 'shift_x',        'header': 'SHX     ',   'format': '{:<8.2f}',   'type': float},
+        { 'name': 'shift_y',        'header': 'SHY     ',   'format': '{:<8.2f}',   'type': float},
+        { 'name': 'magnification',  'header': 'MAG     ',   'format': '{:<8.2f}',   'type': float},
+        { 'name': 'film',           'header': 'FILM',       'format': '{:<4d}',     'type': int},
+        { 'name': 'defocus_u',      'header': 'DF1     ',   'format': '{:<8.2f}',   'type': float},
+        { 'name': 'defocus_v',      'header': 'DF2     ',   'format': '{:<8.2f}',   'type': float},
+        { 'name': 'defocus_angle',  'header': 'ANGAST  ',   'format': '{:<8.2f}',   'type': float},
+        { 'name': 'p_shift',        'header': 'PSHIFT  ',   'format': '{:<8.2f}',   'type': float},
+        { 'name': 'occupancy',      'header': 'OCC     ',   'format': '{:<8.2f}',   'type': float},
+        { 'name': 'log_p',          'header': 'LOGP    ',   'format': '{:<8.2f}',   'type': float},
+        { 'name': 'sigma',          'header': 'SIGMA   ',   'format': '{:<8.2f}',   'type': float},
+        { 'name': 'score',          'header': 'SCORE   ',   'format': '{:<8.2f}',   'type': float},
+        { 'name': 'change',         'header': 'CHANGE  ',   'format': '{:<8.2f}',   'type': float},
     ]
 
     def __init__(self, path, mode):
