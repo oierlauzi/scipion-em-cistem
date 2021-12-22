@@ -270,3 +270,6 @@ def geometryFromMatrix(matrix):
     angles = -np.rad2deg(transformations.euler_from_matrix(matrix, axes='szyz'))
 
     return shifts, angles
+
+def boolToYN(b):
+    return 'y' if b else 'n'

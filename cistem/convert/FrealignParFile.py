@@ -1,5 +1,3 @@
-import math
-
 class FrealignParFileBase(object):
     COMMENT_TOKEN = 'C'
     COLUMN_SEPARATOR = ' '
@@ -42,7 +40,7 @@ class FrealignParFileBase(object):
             self.writeRow(row)
 
         else:
-            raise TypeError('Invalid type')
+            raise TypeError('Invalid type for row')
 
     def writeComment(self, comment):
         line = self.COMMENT_TOKEN + self.COLUMN_SEPARATOR + comment + '\n'
@@ -137,18 +135,22 @@ class FullFrealignParFile(FrealignParFileBase):
         FrealignParFileBase.__init__(self, path, mode, self.COLUMNS)
 
     def writeParticle(self, particle):
+        from .convert import geometryFromMatrix
+
         micId = particle.getMicId()
         ctfModel = particle.getCTF()
         acquisition = particle.getAcquisition()
         transform = particle.getTransform()
         
+        
         # Ensure that a micrograph id is given
         if micId is None:
             micId = 1
 
-        # Determine the orientation information
-        (psi, theta, phi) = rotation_matrix_to_euler(transform.getRotationMatrix()) if transform is not None else (0, 0, 0) # TODO determine ordering
-        (shX, shY, _) = transform.getShifts() if transform is not None else (0, 0, 0)
+        # Determine the geometry information
+        (shifts, angles) = geometryFromMatrix(transform.getMatrix()) if transform is not None else ((0, 0, 0), (0, 0, 0))
+        (psi, theta, phi) = angles
+        (shX, shY, _) = shifts
 
         # Determine the acquisition information
         mag = acquisition.getMagnification() if acquisition is not None else 0
@@ -194,31 +196,16 @@ class FullFrealignParFile(FrealignParFileBase):
         self.writeHeader()
         self.writeParticleSet(particleSet)
 
+class FrealignStatisticsFile(FrealignParFileBase):
+    COLUMNS = [
+        { 'name': 'shell',          'header': 'SHELL ',         'format': '{:<8d}',     'type': int},
+        { 'name': 'resolution',     'header': 'RESOLUTION    ', 'format': '{:<14.5f}',  'type': float},
+        { 'name': 'ring_radius',    'header': 'RING_RADIUS   ', 'format': '{:<14.5f}',  'type': float},
+        { 'name': 'fsc',            'header': 'FSC           ', 'format': '{:<14.5f}',  'type': float},
+        { 'name': 'part_fsc',       'header': 'PART_FSC      ', 'format': '{:<14.5f}',  'type': float},
+        { 'name': 'part_sqrt_ssnr', 'header': 'PART_SSNR_SQRT', 'format': '{:<14.5f}',  'type': float},
+        { 'name': 'rec_sqrt_ssnr',  'header': 'REC_SSNR_SQRT ', 'format': '{:<14.5f}',  'type': float},
+    ]
 
-def rotation_matrix_to_euler(m):
-    """
-    Given the 3d rotation matrix m (3x3 size) it returns
-    the transformation as Euler angles in the form of the
-    tuple (x, y, z)
-    """
-
-    r = math.sqrt(m[0,0]*m[0,0] + m[1,0]*m[1,0])
-    singular = math.isclose(r, 0.0)
-
-    # Mind the gimbal lock
-    if not singular :
-        x = math.atan2(m[2,1] , m[2,2])
-        y = math.atan2(-m[2,0], r)
-        z = math.atan2(m[1,0], m[0,0])
-    else:
-        x = math.atan2(-m[1,2], m[1,1])
-        y = math.atan2(-m[2,0], r)
-        z = 0
-
-    # Convert it to deg
-    x = math.degrees(x)
-    y = math.degrees(y)
-    z = math.degrees(z)
-
-    # Same ordering as MATLAB
-    return (z, y, x)
+    def __init__(self, path, mode):
+        FrealignParFileBase.__init__(self, path, mode, self.COLUMNS)
