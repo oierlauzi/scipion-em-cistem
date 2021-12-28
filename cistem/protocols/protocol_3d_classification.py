@@ -28,7 +28,7 @@ from pyworkflow.protocol.constants import LEVEL_ADVANCED, STEPS_PARALLEL
 from pyworkflow.protocol.params import EnumParam, MultiPointerParam, PointerParam, FloatParam, IntParam, BooleanParam, StringParam
 from pyworkflow.protocol.params import LT, LE, GE, GT, Range
 from pyworkflow.constants import BETA
-from pyworkflow.utils.path import makePath, createLink, cleanPattern, moveFile
+from pyworkflow.utils.path import copyFile, makePath, createLink, cleanPattern, moveFile
 
 from pwem.protocols import ProtClassify3D
 
@@ -76,7 +76,9 @@ class CistemProt3DClassification(ProtClassify3D):
             'reconstruct3d_output_dump': f'Reconstruct3D/Dumps/output_dump_{iterFmt}_{classFmt}_{parityFmt}_{jobFmt}.dmp',
             'merge3d_input_dump': f'Merge3D/Dumps/input_dump_{parityFmt}_{seedFmt}.dmp',
             'merge3d_output_reconstruction': f'Merge3D/Reconstructions/output_reconstruction_{iterFmt}_{classFmt}_{reconstructionNameFmt}.mrc',
-            'merge3d_output_resolution_statistics': f'Merge3D/Statistics/output_resolution_statistics_{iterFmt}_{classFmt}.txt',
+            'merge3d_output_statistics': f'Merge3D/Statistics/output_resolution_statistics_{iterFmt}_{classFmt}.txt',
+            'output_volume': f'Reconstructions/output_volume_{iterFmt}_{classFmt}.mrc',
+            'output_statistics': f'Statistics/output_statistics_{iterFmt}_{classFmt}.txt'
         }
         self._updateFilenamesDict(myDict)
     # --------------------------- DEFINE param functions ----------------------
@@ -217,15 +219,200 @@ class CistemProt3DClassification(ProtClassify3D):
         nCycles = self.cycleCount.get()
         nClasses = len(self.input_initialVolumes)
         nParticles = len(self.input_particles.get())
-        nWorkers = int(self.numberOfMpi)*int(self.numberOfThreads)
-        workDistribution = distribute_work(nParticles, nWorkers)
-        nJobs = len(workDistribution)
+        nWorkers = max(int(self.numberOfMpi), int(self.numberOfThreads))
+        workDistribution = distribute_work(nParticles, nWorkers-1)
+        nBlocks = len(workDistribution)
         
         # Initialize required files for the first iteration
         self._insertFunctionStep('convertInputStep', workDistribution)
 
+        # Execute the pipeline in multiple depending on the parallelization strategy
+        prerequisites = []
+        if nBlocks > 1:
+            prerequisites = self._insertMultiBlockSteps(nCycles, nClasses, nBlocks)
+        else:
+            prerequisites = self._insertMonoBlockSteps(nCycles, nClasses)
+
+        # Generate the output TODO WIP
+        #self._insertFunctionStep('createOutputStep', prerequisites=prerequisites)
+
+    # --------------------------- STEPS functions -----------------------------
+    
+    def convertInputStep(self, workDistribution):
+        self._createWorkingDir()
+
+        # Distribute particles according to the work sizes
+        particles = self.input_particles.get()
+        particleGroups = self._distributeParticles(particles, workDistribution)
+
+        # Write particle stacks and parameter files for each group
+        for job, particleGroup in enumerate(particleGroups):
+            self._createInputParticleStack(job, particleGroup)
+            self._createInputParameters(job, particleGroup)
+
+        self._createInitialVolumes()
+
+        # Initialize last classification field
+        self.lastClassification = []
+        for count in workDistribution:
+            self.lastClassification.append([-1]*count)
+
+    def refineStep(self, iter, cls, job):
+        # Shorthands for variables
+        refine3d = Plugin.getProgram('refine3d')
+
+        # Execute the refine3d program
+        self._prepareRefine(iter, cls, job)
+        args = self._getRefineArgTemplate() % self._getRefineArgDictionary(iter, cls, job)
+        self.runJob(refine3d, args, cwd=self._getTmpPath(), env=Plugin.getEnviron())
+    
+    def refineAllStep(self, iter, cls):
+        # Simply call the threaded version with job=0
+        self.refineStep(iter, cls, 0)
+
+    def classifyStep(self, nClasses, iter, job):
+        refinement = self._readRefinementParameters(nClasses, iter, job)
+
+        # Perform the classification
+        for i in range(len(refinement[0])):
+            # Determine the best class
+            bestCls = 0
+            for cls in range(1, len(refinement)):
+                if refinement[cls][i]['score'] > refinement[bestCls][i]['score']:
+                    bestCls = cls
+
+            # Modify the refinement to only include the best class
+            for cls in range(len(refinement)):
+                refinement[cls][i]['mic_id'] = i + 1 # Used as index
+                refinement[cls][i]['magnification'] = 0.0
+                refinement[cls][i]['film'] = 1 if cls == bestCls else 0 # Used as include
+                refinement[cls][i]['change'] = 0.0
+
+
+            # Store the results
+            self.lastClassification[job][i] = bestCls
+
+        # Write the results to disk
+        for cls, particles in enumerate(refinement):
+            path = self._getTmpPath(self._getFileName('classify_output_parameters', iter=iter, cls=cls, job=job))
+            with FullFrealignParFile(path, 'w') as f:
+                f.writeHeader()
+                for particle in particles:
+                    f.writeRow(particle)
+    
+    def classifyAllStep(self, nClasses, iter):
+        # Simply call the threaded version with job=0
+        self.classifyStep(nClasses, iter, 0)
+
+    def reconstructStep(self, iter, cls, job):
+        # Shorthands for variables
+        reconstruct3d = Plugin.getProgram('reconstruct3d')
+
+        # Execute the reconstruct3d program
+        self._prepareReconstruct(iter, cls, job)
+        args = self._getReconstructArgTemplate() % self._getReconstructArgDictionary(iter, cls, job)        
+        self.runJob(reconstruct3d, args, cwd=self._getTmpPath(), env=Plugin.getEnviron())
+
+    def mergeStep(self, nJobs, iter, cls):
+        merge3d = Plugin.getProgram('merge3d')
+
+        # Execute the merge3d program
+        self._prepareMerge(nJobs, iter, cls)
+        argTemplate = self._getMergeArgTemplate()
+        args = argTemplate % self._getMergeArgDictionary(nJobs, iter, cls)
+        self.runJob(merge3d, args, cwd=self._getTmpPath(), env=Plugin.getEnviron())
+
+        # Copy the output volume and statistics
+        copyFile(
+            self._getTmpPath(self._getFileName('merge3d_output_reconstruction', iter=iter, cls=cls, rec='filtered')),
+            self._getExtraPath(self._getFileName('output_volume', iter=iter, cls=cls))
+        )
+        copyFile(
+            self._getTmpPath(self._getFileName('merge3d_output_statistics', iter=iter, cls=cls)),
+            self._getExtraPath(self._getFileName('output_statistics', iter=iter, cls=cls))
+        )
+
+    def reconstructAllStep(self, iter, cls):
+        # Shorthands for variables
+        reconstruct3d = Plugin.getProgram('reconstruct3d')
+
+        # Execute the reconstruct3d program
+        self._prepareReconstruct(iter, cls, 0)
+        args = self._getReconstructArgTemplate() % self._getReconstructArgDictionary(iter, cls, 0, True)        
+        self.runJob(reconstruct3d, args, cwd=self._getTmpPath(), env=Plugin.getEnviron())
+
+        # Copy the output volume and statistics
+        copyFile(
+            self._getTmpPath(self._getFileName('reconstruct3d_output_reconstruction', iter=iter, cls=cls, job=0, rec='filtered')),
+            self._getExtraPath(self._getFileName('output_volume', iter=iter, cls=cls))
+        )
+        copyFile(
+            self._getTmpPath(self._getFileName('reconstruct3d_output_statistics', iter=iter, cls=cls, job=0)),
+            self._getExtraPath(self._getFileName('output_statistics', iter=iter, cls=cls))
+        )
+
+    def createOutputStep(self, nClasses):
+        particles = self.input_particles.get()
+        
+        # Create a SetOfClasses3D
+        classes3D = self._createSetOfClasses3D(particles)
+        self._fillClassesFromIter(classes3D)
+        
+        self._defineOutputs(outputClasses=classes3D)
+        self._defineSourceRelation(self.input_particles, classes3D)
+
+        # Create a SetOfVolumes and define its relations
+        volumes = self._createSetOfVolumes()
+        volumes.setSamplingRate(particles.getSamplingRate())
+        
+        for class3D in classes3D:
+            vol = class3D.getRepresentative()
+            vol.setObjId(class3D.getObjId())
+            volumes.append(vol)
+        
+        self._defineOutputs(outputVolumes=volumes)
+        self._defineSourceRelation(self.inputParticles, volumes)
+
+    # --------------------------- INFO functions ------------------------------
+    def _validate(self):
+        pass
+
+    def _summary(self):
+        pass
+
+    def _methods(self):
+        pass
+
+    # --------------------------- UTILS functions -----------------------------
+
+    def _insertMonoBlockSteps(self, nCycles, nClasses):
         # Perform refine, reconstruct and merge steps repeatedly
-        mergeSteps = [len(self._steps)]*nClasses # Initialize to the convertInputStep, where initial volumes are created
+        reconstructSteps = [len(self._steps)]*nClasses # Initialize to the previous step
+        for i in range(nCycles):
+            # Refine all classes
+            refineSteps = [0]*nClasses
+            for j in range(nClasses):
+                prerequisites = [reconstructSteps[j]] # Depend on the creation of the initial volume
+                self._insertFunctionStep('refineAllStep', i, j, prerequisites=prerequisites)
+                refineSteps[j] = len(self._steps)
+
+            # Classify according to the result of the refinement
+            prerequisites = refineSteps # Depend on all previous refinements referring to this job
+            self._insertFunctionStep('classifyAllStep', nClasses, i, prerequisites=prerequisites)
+            classifySteps = [len(self._steps)]
+
+            # Reconstruct each class
+            reconstructSteps = [0]*nClasses
+            for j in range(nClasses):
+                prerequisites = classifySteps # Depend on the classification referring to this job
+                self._insertFunctionStep('reconstructAllStep', i, j, prerequisites=prerequisites)
+                reconstructSteps[j] = len(self._steps)
+
+        return reconstructSteps # Return the completion of all reconstruct steps
+
+    def _insertMultiBlockSteps(self, nCycles, nClasses, nJobs):
+        # Perform refine, reconstruct and merge steps repeatedly
+        mergeSteps = [len(self._steps)]*nClasses # Initialize to the previous step
         for i in range(nCycles):
             # Refine all classes
             refineSteps = [[0]*nJobs for _ in range(nClasses)]
@@ -254,98 +441,11 @@ class CistemProt3DClassification(ProtClassify3D):
                 self._insertFunctionStep('mergeStep', nJobs, i, j, prerequisites=prerequisites)
                 mergeSteps[j] = len(self._steps)
 
-        # Generate the output
-        prerequisites = mergeSteps # Depend on the creation of all initial volumes
-        self._insertFunctionStep('createOutputStep', prerequisites=prerequisites)
-
-    # --------------------------- STEPS functions -----------------------------
-    
-    def convertInputStep(self, workDistribution):
-        self._createWorkingDir()
-
-        # Distribute particles according to the work sizes
-        particles = self.input_particles.get()
-        particleGroups = self._distributeParticles(particles, workDistribution)
-
-        # Write particle stacks and parameter files for each group
-        for job, particleGroup in enumerate(particleGroups):
-            self._createInputParticleStack(job, particleGroup)
-            self._createInputParameters(job, particleGroup)
-
-        self._createInitialVolumes()
-
-    def refineStep(self, iter, cls, job):
-        # Shorthands for variables
-        refine3d = Plugin.getProgram('refine3d')
-
-        # Execute the refine3d program
-        self._prepareRefine(iter, cls, job)
-        args = self._getRefineArgTemplate() % self._getRefineArgDictionary(iter, cls, job)
-        self.runJob(refine3d, args, cwd=self._getExtraPath(), env=Plugin.getEnviron())
-
-    def classifyStep(self, nClasses, iter, job):
-        refinement = self._readRefinementParameters(nClasses, iter, job)
-
-        # Perform the classification
-        for i in range(len(refinement[0])):
-            # Determine the best class
-            bestCls = 0
-            maxScore = 0.0
-            for cls in range(len(refinement)):
-                score = refinement[cls][i]['score']
-                if score >= maxScore:
-                    (bestCls, maxScore) = (cls, score)
-
-            # Modify the refinement to only include the best class
-            for cls in range(len(refinement)):
-                refinement[cls][i]['film'] = 1 if cls == bestCls else 0 # Used as include
-
-        # Write the results to disk
-        for cls, particles in enumerate(refinement):
-            path = self._getExtraPath(self._getFileName('classify_output_parameters', iter=iter, cls=cls, job=job))
-            with FullFrealignParFile(path, 'w') as f:
-                f.writeHeader()
-                for particle in particles:
-                    f.writeRow(particle)
-
-    def reconstructStep(self, iter, cls, job):
-        # Shorthands for variables
-        reconstruct3d = Plugin.getProgram('reconstruct3d')
-
-        # Execute the reconstruct3d program
-        self._prepareReconstruct(iter, cls, job)
-        args = self._getReconstructArgTemplate() % self._getReconstructArgDictionary(iter, cls, job)        
-        self.runJob(reconstruct3d, args, cwd=self._getExtraPath(), env=Plugin.getEnviron())
-
-    def mergeStep(self, nJobs, iter, cls):
-        merge3d = Plugin.getProgram('merge3d')
-
-        # Execute the merge3d program
-        self._prepareMerge(nJobs, iter, cls)
-        argTemplate = self._getMergeArgTemplate()
-        args = argTemplate % self._getMergeArgDictionary(nJobs, iter, cls)
-        self.runJob(merge3d, args, cwd=self._getExtraPath(), env=Plugin.getEnviron())
-
-    def createOutputStep(self):
-        pass
-
-    # --------------------------- INFO functions ------------------------------
-    def _validate(self):
-        pass
-
-    def _summary(self):
-        pass
-
-    def _methods(self):
-        pass
-
-    # --------------------------- UTILS functions -----------------------------
-
-
+        return mergeSteps # Return the completion of all merge steps
 
 
     def _createWorkingDir(self):
-        directories = [
+        tmpDirectories = [
             'Refine3D/Parameters',
             'Refine3D/Reconstructions',
             'Refine3D/Statistics',
@@ -359,10 +459,17 @@ class CistemProt3DClassification(ProtClassify3D):
             'Merge3D/Statistics',
             'Merge3D/Dumps',
         ]
+
+        extraDirectories = [
+            'Reconstructions',
+            'Statistics'
+        ]
         
-        for d in directories:
-            path = self._getExtraPath(d)                    
-            makePath(path)
+        for d in tmpDirectories:
+            makePath(self._getTmpPath(d))
+
+        for d in extraDirectories:
+            makePath(self._getExtraPath(d))
 
     def _distributeParticles(self, particles, workDistribution):
         # Cistem requires input particles to be ordered by micrograph id
@@ -392,11 +499,11 @@ class CistemProt3DClassification(ProtClassify3D):
 
 
     def _createInputParticleStack(self, job, particles):
-        path = self._getExtraPath(self._getFileName('input_particles', job=job))
+        path = self._getTmpPath(self._getFileName('input_particles', job=job))
         particles.writeStack(path) # They should be already ordered by micId
 
     def _createInputParameters(self, job, particles):
-        path = self._getExtraPath(self._getFileName('input_parameters', job=job))
+        path = self._getTmpPath(self._getFileName('input_parameters', job=job))
 
         with FullFrealignParFile(path, 'w') as f:
             f.writeHeaderAndParticleSet(particles)
@@ -406,7 +513,7 @@ class CistemProt3DClassification(ProtClassify3D):
 
         ih = ImageHandler()
         for i, vol in enumerate(initialVolumes):
-            path = self._getExtraPath(self._getFileName('input_volume', cls=i))
+            path = self._getTmpPath(self._getFileName('input_volume', cls=i))
             ih.convert(vol.get(), path)
 
 
@@ -414,26 +521,26 @@ class CistemProt3DClassification(ProtClassify3D):
         if iter == 0:
             # For the first step use the input volume as the input reconstruction
             createLink(
-                self._getExtraPath(self._getFileName('input_volume', cls=cls)),
-                self._getExtraPath(self._getFileName('refine3d_input_reconstruction', iter=iter, cls=cls))
+                self._getTmpPath(self._getFileName('input_parameters', job=job)),
+                self._getTmpPath(self._getFileName('refine3d_input_parameters', iter=iter, cls=cls, job=job))
             )
             createLink(
-                self._getExtraPath(self._getFileName('input_parameters', job=job)),
-                self._getExtraPath(self._getFileName('refine3d_input_parameters', iter=iter, cls=cls, job=job))
+                self._getTmpPath(self._getFileName('input_volume', cls=cls)),
+                self._getTmpPath(self._getFileName('refine3d_input_reconstruction', iter=iter, cls=cls))
             )
         else:
             # Use the statistics, parameters and volume from the previous reconstruction
             createLink(
-                self._getExtraPath(self._getFileName('merge3d_output_reconstruction', iter=iter-1, cls=cls, rec='filtered')),
-                self._getExtraPath(self._getFileName('refine3d_input_reconstruction', iter=iter, cls=cls))
+                self._getTmpPath(self._getFileName('refine3d_output_parameters', iter=iter-1, cls=cls, job=job)),
+                self._getTmpPath(self._getFileName('refine3d_input_parameters', iter=iter, cls=cls, job=job))
             )
             createLink(
-                self._getExtraPath(self._getFileName('refine3d_output_parameters', iter=iter-1, cls=cls, job=job)),
-                self._getExtraPath(self._getFileName('refine3d_input_parameters', iter=iter, cls=cls, job=job))
+                self._getExtraPath(self._getFileName('output_volume', iter=iter-1, cls=cls)),
+                self._getTmpPath(self._getFileName('refine3d_input_reconstruction', iter=iter, cls=cls))
             )
             createLink(
-                self._getExtraPath(self._getFileName('merge3d_output_resolution_statistics', iter=iter-1, cls=cls)),
-                self._getExtraPath(self._getFileName('refine3d_input_statistics', iter=iter, cls=cls))
+                self._getExtraPath(self._getFileName('output_statistics', iter=iter-1, cls=cls)),
+                self._getTmpPath(self._getFileName('refine3d_input_statistics', iter=iter, cls=cls))
             )
 
 
@@ -541,13 +648,13 @@ eof
             'refine_phi': boolToYN(self.refine_phi.get()),
             'refine_x': boolToYN(self.refine_xShift.get()),
             'refine_y': boolToYN(self.refine_yShift.get()),
-            'calculate_matching_projections': boolToYN(False), # TODO determine
+            'calculate_matching_projections': boolToYN(False),
             'apply_2D_masking': boolToYN(self.classification_enableFocus.get()),
             'ctf_refinement': boolToYN(self.ctf_enable.get()),
             'normalize_particles': boolToYN(True),
-            'invert_contrast': boolToYN(False), # TODO determine
+            'invert_contrast': boolToYN(inputParticles.isPhaseFlipped()), # TODO determine has white protein
             'exclude_blank_edges': boolToYN(False), 
-            'normalize_input_3d': boolToYN(True), # TODO determine
+            'normalize_input_3d': boolToYN(not self.reconstruction_enableLikelihoodBlurring.get()),
             'threshold_input_3d': boolToYN(True),
         }
 
@@ -556,7 +663,7 @@ eof
 
         # Read all the putput parameters
         for cls in range(nClasses):
-            path = self._getExtraPath(self._getFileName('refine3d_output_parameters', iter=iter, cls=cls, job=job))
+            path = self._getTmpPath(self._getFileName('refine3d_output_parameters', iter=iter, cls=cls, job=job))
 
             # Read an entire file
             with FullFrealignParFile(path, 'r') as f:
@@ -573,20 +680,20 @@ eof
         if iter == 0:
             # For the first step use the input volume as the input reconstruction
             createLink(
-                self._getExtraPath(self._getFileName('input_volume', cls=cls)),
-                self._getExtraPath(self._getFileName('reconstruct3d_input_reconstruction', iter=iter, cls=cls))
+                self._getTmpPath(self._getFileName('input_volume', cls=cls)),
+                self._getTmpPath(self._getFileName('reconstruct3d_input_reconstruction', iter=iter, cls=cls))
             )
         else:
             # Use the previous reconstruction
             createLink(
-                self._getExtraPath(self._getFileName('merge3d_output_reconstruction', iter=iter-1, cls=cls, rec='filtered')),
-                self._getExtraPath(self._getFileName('reconstruct3d_input_reconstruction', iter=iter, cls=cls))
+                self._getExtraPath(self._getFileName('output_volume', iter=iter-1, cls=cls)),
+                self._getTmpPath(self._getFileName('reconstruct3d_input_reconstruction', iter=iter, cls=cls))
             )
 
         # Use the parameters provided by the previous step
         createLink(
-            self._getExtraPath(self._getFileName('refine3d_output_parameters', iter=iter, cls=cls, job=job)),
-            self._getExtraPath(self._getFileName('reconstruct3d_input_parameters', iter=iter, cls=cls, job=job))
+            self._getTmpPath(self._getFileName('classify_output_parameters', iter=iter, cls=cls, job=job)),
+            self._getTmpPath(self._getFileName('reconstruct3d_input_parameters', iter=iter, cls=cls, job=job))
         )
 
     def _getReconstructArgTemplate(self):
@@ -629,7 +736,7 @@ eof
 eof
 """
 
-    def _getReconstructArgDictionary(self, iter, cls, job):
+    def _getReconstructArgDictionary(self, iter, cls, job, all=False):
         inputParticles = self.input_particles.get()
         acquisition = inputParticles.getAcquisition()
 
@@ -658,15 +765,15 @@ eof
             'smoothing_factor': self.reconstruction_smoothingFactor.get(),
             'padding': 1.0,
             'normalize_particles': boolToYN(True),
-            'invert_contrast': boolToYN(False), # TODO determine
+            'invert_contrast': boolToYN(inputParticles.isPhaseFlipped()), # TODO determine is white protein
             'exclude_blank_edges': boolToYN(False),
             'adjust_scores': boolToYN(self.reconstruction_adjustScore4Defocus.get()),
             'crop_images': boolToYN(self.reconstruction_enableAutoCrop.get()),
-            'split_even_odd': boolToYN(True), # TODO does not work if false
+            'split_even_odd': boolToYN(False),
             'center_mass': boolToYN(False),
-            'use_input_reconstruction': boolToYN(False), # TODO determine
+            'use_input_reconstruction': boolToYN(self.reconstruction_enableLikelihoodBlurring.get()),
             'threshold_input_3d': boolToYN(True),
-            'dump_arrays': boolToYN(True),
+            'dump_arrays': boolToYN(not all),
             'dump_file_1': self._getFileName('reconstruct3d_output_dump', iter=iter, cls=cls, job=job, par='odd'),
             'dump_file_2': self._getFileName('reconstruct3d_output_dump', iter=iter, cls=cls, job=job, par='evn'),
         }
@@ -676,8 +783,8 @@ eof
         parities = ['evn', 'odd']
         for parity in parities:
             for i in range(nJobs):
-                src = self._getExtraPath(self._getFileName('reconstruct3d_output_dump', iter=iter, cls=cls, job=i, par=parity))
-                dst = self._getExtraPath(self._getFileName('merge3d_input_dump', iter=iter, cls=cls, par=parity, seed=str(i+1)))
+                src = self._getTmpPath(self._getFileName('reconstruct3d_output_dump', iter=iter, cls=cls, job=i, par=parity))
+                dst = self._getTmpPath(self._getFileName('merge3d_input_dump', iter=iter, cls=cls, par=parity, seed=str(i+1)))
                 createLink(src, dst)
 
     def _getMergeArgTemplate(self):
@@ -700,7 +807,7 @@ eof
             'output_reconstruction_1': self._getFileName('merge3d_output_reconstruction', iter=iter, cls=cls, rec='1'),
             'output_reconstruction_2': self._getFileName('merge3d_output_reconstruction', iter=iter, cls=cls, rec='2'),
             'output_reconstruction_filtered': self._getFileName('merge3d_output_reconstruction', iter=iter, cls=cls, rec='filtered'),
-            'output_resolution_statistics': self._getFileName('merge3d_output_resolution_statistics', iter=iter, cls=cls),
+            'output_resolution_statistics': self._getFileName('merge3d_output_statistics', iter=iter, cls=cls),
             'molecular_mass_kDa': self.input_molecularMass.get(),
             'inner_mask_radius': self.refine_innerMaskRadius.get(),
             'outer_mask_radius': self.refine_outerMaskRadius.get(),
@@ -708,6 +815,10 @@ eof
             'dump_file_seed_2': self._getFileName('merge3d_input_dump', iter=iter, cls=cls, par='evn', seed=''),
             'number_of_dump_files': nJobs,
         }
+
+    def _copyTempFiles(self, nIter, nClasses, nJobs):
+        pass
+
 
 
 def distribute_work(n, m):
@@ -727,6 +838,12 @@ def distribute_work(n, m):
 
     # Ensure that all the work has been distributed correctly
     assert(np.sum(result) == n)
-    assert(len(result) == m)
+    assert(len(result) <= m)
 
+    return result
+
+def flatten(x):
+    result = []
+    for sublist in x:
+        result.extend(sublist)
     return result
