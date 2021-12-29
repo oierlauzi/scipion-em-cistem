@@ -59,8 +59,8 @@ class CistemProt3DClassification(ProtClassify3D):
         seedFmt='%(seed)s'
 
         myDict = {
-            'input_particles': f'input_particles_{jobFmt}.mrcs',
-            'input_parameters': f'input_parameters_{jobFmt}.par',
+            'input_particles': f'input_particles.mrcs',
+            'input_parameters': f'input_parameters.par',
             'input_volume': f'input_volume_{classFmt}.mrc',
             'refine3d_input_parameters': f'Refine3D/Parameters/input_parameters_{iterFmt}_{classFmt}_{jobFmt}.par',
             'refine3d_input_reconstruction': f'Refine3D/Reconstructions/input_reconstruction_{iterFmt}_{classFmt}.mrc',
@@ -220,11 +220,14 @@ class CistemProt3DClassification(ProtClassify3D):
         nClasses = len(self.input_initialVolumes)
         nParticles = len(self.input_particles.get())
         nWorkers = max(int(self.numberOfMpi), int(self.numberOfThreads))
-        workDistribution = distribute_work(nParticles, nWorkers-1)
-        nBlocks = len(workDistribution)
+        self.workDistribution = distribute_work(nParticles, nWorkers)
+        nBlocks = len(self.workDistribution)
         
+        # Initialize the last classification field
+        self.lastClassification = [-1] * nParticles
+
         # Initialize required files for the first iteration
-        self._insertFunctionStep('convertInputStep', workDistribution)
+        self._insertFunctionStep('convertInputStep')
 
         # Execute the pipeline in multiple depending on the parallelization strategy
         prerequisites = []
@@ -238,25 +241,12 @@ class CistemProt3DClassification(ProtClassify3D):
 
     # --------------------------- STEPS functions -----------------------------
     
-    def convertInputStep(self, workDistribution):
+    def convertInputStep(self):
         self._createWorkingDir()
-
-        # Distribute particles according to the work sizes
-        particles = self.input_particles.get()
-        particleGroups = self._distributeParticles(particles, workDistribution)
-
-        # Write particle stacks and parameter files for each group
-        for job, particleGroup in enumerate(particleGroups):
-            self._createInputParticleStack(job, particleGroup)
-            self._createInputParameters(job, particleGroup)
-
-        self._createInitialVolumes()
-
-        # Initialize last classification field
-        self.lastClassification = []
-        for count in workDistribution:
-            self.lastClassification.append([-1]*count)
-
+        self._createInputParticleStack()
+        self._createInputParameters()
+        self._createInputInitialVolumes()
+    
     def refineStep(self, iter, cls, job):
         # Shorthands for variables
         refine3d = Plugin.getProgram('refine3d')
@@ -265,10 +255,6 @@ class CistemProt3DClassification(ProtClassify3D):
         self._prepareRefine(iter, cls, job)
         args = self._getRefineArgTemplate() % self._getRefineArgDictionary(iter, cls, job)
         self.runJob(refine3d, args, cwd=self._getTmpPath(), env=Plugin.getEnviron())
-    
-    def refineAllStep(self, iter, cls):
-        # Simply call the threaded version with job=0
-        self.refineStep(iter, cls, 0)
 
     def classifyStep(self, nClasses, iter, job):
         refinement = self._readRefinementParameters(nClasses, iter, job)
@@ -283,14 +269,13 @@ class CistemProt3DClassification(ProtClassify3D):
 
             # Modify the refinement to only include the best class
             for cls in range(len(refinement)):
-                refinement[cls][i]['mic_id'] = i + 1 # Used as index
                 refinement[cls][i]['magnification'] = 0.0
                 refinement[cls][i]['film'] = 1 if cls == bestCls else 0 # Used as include
                 refinement[cls][i]['change'] = 0.0
 
 
             # Store the results
-            self.lastClassification[job][i] = bestCls
+            self.lastClassification[refinement[0][i]['mic_id'] - 1] = bestCls # mic_id holds stack position
 
         # Write the results to disk
         for cls, particles in enumerate(refinement):
@@ -299,10 +284,6 @@ class CistemProt3DClassification(ProtClassify3D):
                 f.writeHeader()
                 for particle in particles:
                     f.writeRow(particle)
-    
-    def classifyAllStep(self, nClasses, iter):
-        # Simply call the threaded version with job=0
-        self.classifyStep(nClasses, iter, 0)
 
     def reconstructStep(self, iter, cls, job):
         # Shorthands for variables
@@ -393,12 +374,12 @@ class CistemProt3DClassification(ProtClassify3D):
             refineSteps = [0]*nClasses
             for j in range(nClasses):
                 prerequisites = [reconstructSteps[j]] # Depend on the creation of the initial volume
-                self._insertFunctionStep('refineAllStep', i, j, prerequisites=prerequisites)
+                self._insertFunctionStep('refineStep', i, j, 0, prerequisites=prerequisites)
                 refineSteps[j] = len(self._steps)
 
             # Classify according to the result of the refinement
             prerequisites = refineSteps # Depend on all previous refinements referring to this job
-            self._insertFunctionStep('classifyAllStep', nClasses, i, prerequisites=prerequisites)
+            self._insertFunctionStep('classifyStep', nClasses, i, 0, prerequisites=prerequisites)
             classifySteps = [len(self._steps)]
 
             # Reconstruct each class
@@ -471,44 +452,21 @@ class CistemProt3DClassification(ProtClassify3D):
         for d in extraDirectories:
             makePath(self._getExtraPath(d))
 
-    def _distributeParticles(self, particles, workDistribution):
-        # Cistem requires input particles to be ordered by micrograph id
-        particleIter = iter(particles.iterItems(orderBy=['_micId', 'id'], 
-                                                direction='ASC' ))
+    def _createInputParticleStack(self):
+        particles = self.input_particles.get()
+        path = self._getTmpPath(self._getFileName('input_particles'))
+        particles.writeStack(path)
 
-        # Separate particles into groups
-        groups = []
-        for jobSize in workDistribution:
-            # Create a new set of particles at the back, configuring it as the source one
-            group = self._createSetOfParticles()
-            group.copyInfo(particles)
-
-            # Append as many particles as requested to the group
-            for _ in range(jobSize):
-                particle = next(particleIter, None)
-                assert(particle is not None)
-                group.append(particle)
-
-            # Write the new group to the result
-            groups.append(group)
-
-        # Ensure we have consumed all particles
-        assert(next(particleIter, None) is None)
-
-        return groups
-
-
-    def _createInputParticleStack(self, job, particles):
-        path = self._getTmpPath(self._getFileName('input_particles', job=job))
-        particles.writeStack(path) # They should be already ordered by micId
-
-    def _createInputParameters(self, job, particles):
-        path = self._getTmpPath(self._getFileName('input_parameters', job=job))
+    def _createInputParameters(self):
+        particles = self.input_particles.get()
+        path = self._getTmpPath(self._getFileName('input_parameters'))
 
         with FullFrealignParFile(path, 'w') as f:
-            f.writeHeaderAndParticleSet(particles)
+            f.writeHeader()
+            for i, particle in enumerate(particles):
+                f.writeParticle(particle, i+1) # Use its 1-based index as the mic_id
 
-    def _createInitialVolumes(self):
+    def _createInputInitialVolumes(self):
         initialVolumes = self.input_initialVolumes
 
         ih = ImageHandler()
@@ -521,7 +479,7 @@ class CistemProt3DClassification(ProtClassify3D):
         if iter == 0:
             # For the first step use the input volume as the input reconstruction
             createLink(
-                self._getTmpPath(self._getFileName('input_parameters', job=job)),
+                self._getTmpPath(self._getFileName('input_parameters')),
                 self._getTmpPath(self._getFileName('refine3d_input_parameters', iter=iter, cls=cls, job=job))
             )
             createLink(
@@ -603,9 +561,10 @@ eof
     def _getRefineArgDictionary(self, iter, cls, job):
         inputParticles = self.input_particles.get()
         acquisition = inputParticles.getAcquisition()
+        block = self.workDistribution[job]
 
         return {
-            'input_particle_images': self._getFileName('input_particles', job=job),
+            'input_particle_images': self._getFileName('input_particles'),
             'input_parameter_file': self._getFileName('refine3d_input_parameters', iter=iter, cls=cls, job=job),
             'input_reconstruction': self._getFileName('refine3d_input_reconstruction', iter=iter, cls=cls),
             'input_reconstruction_statistics': self._getFileName('refine3d_input_statistics', iter=iter, cls=cls),
@@ -614,8 +573,8 @@ eof
             'output_parameter_file': self._getFileName('refine3d_output_parameters', iter=iter, cls=cls, job=job),
             'output_shift_file': self._getFileName('refine3d_output_shifts', iter=iter, cls=cls, job=job),
             'my_symmetry': self.refine_symmetry.get(),
-            'first_particle': 0,
-            'last_particle': 0,
+            'first_particle': block[0] + 1,
+            'last_particle': block[1],
             'percent_used': self.refine_usedPercentage.get() / 100.0,
             'pixel_size': 1.0/inputParticles.getSamplingRate(), # Pixel size is the inverse of the sampling rate
             'voltage_kV': acquisition.getVoltage(), # Already in kV
@@ -739,9 +698,10 @@ eof
     def _getReconstructArgDictionary(self, iter, cls, job, all=False):
         inputParticles = self.input_particles.get()
         acquisition = inputParticles.getAcquisition()
+        block = self.workDistribution[job]
 
         return {
-            'input_particle_stack': self._getFileName('input_particles', job=job),
+            'input_particle_stack': self._getFileName('input_particles'),
             'input_parameter_file': self._getFileName('reconstruct3d_input_parameters', iter=iter, cls=cls, job=job),
             'input_reconstruction': self._getFileName('reconstruct3d_input_reconstruction', iter=iter, cls=cls),
             'output_reconstruction_1': self._getFileName('reconstruct3d_output_reconstruction', iter=iter, cls=cls, job=job, rec='1'),
@@ -749,8 +709,8 @@ eof
             'output_reconstruction_filtered': self._getFileName('reconstruct3d_output_reconstruction', iter=iter, cls=cls, job=job, rec='filtered'),
             'output_resolution_statistics': self._getFileName('reconstruct3d_output_statistics', iter=iter, cls=cls, job=job),
             'my_symmetry': self.refine_symmetry.get(),
-            'first_particle': 0,
-            'last_particle': 0,
+            'first_particle': block[0] + 1,
+            'last_particle': block[1],
             'pixel_size': 1.0/inputParticles.getSamplingRate(), # Pixel size is the inverse of the sampling rate
             'voltage_kV': acquisition.getVoltage(), # Already in kV
             'spherical_aberration_mm': acquisition.getSphericalAberration(), # Already in mm
@@ -823,7 +783,7 @@ eof
 
 def distribute_work(n, m):
     """ Given an n, it distributes it into at most m similarly sized groups. It returns a list 
-    with the amount elements in each group"""
+    with the [first, last) elements of each group"""
 
     # Obtain the quotient and the reminder of dividing n by m
     q, r = divmod(n, m)
@@ -831,14 +791,24 @@ def distribute_work(n, m):
     # Distribute the work as evenly as possible, groups of the same size
     # as the quotient and the reminder spread across the first group. If 
     # m>n, q=0, so avoid adding zeros at the end of the array
+    result = []
+    first = 0
+    for _ in range(r):
+        last = first + q + 1
+        result.append((first, last))
+        first = last
+
     if q > 0:
-        result = [q+1]*r + [q]*(m-r) # Always r<m
-    else:
-        result = [1]*r
+        for _ in range(m-r): # always r < m
+            last = first + q
+            result.append((first, last))
+            first = last
+
 
     # Ensure that all the work has been distributed correctly
-    assert(np.sum(result) == n)
-    assert(len(result) <= m)
+    assert(result[0][0] == 0) # Start at 0
+    assert(result[-1][1] == n) # End at n
+    assert(len(result) <= m) # At most m groups
 
     return result
 

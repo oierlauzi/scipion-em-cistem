@@ -134,10 +134,10 @@ class FullFrealignParFile(FrealignParFileBase):
     def __init__(self, path, mode):
         FrealignParFileBase.__init__(self, path, mode, self.COLUMNS)
 
-    def writeParticle(self, particle):
+    def writeParticle(self, particle, id=None):
         from .convert import geometryFromMatrix
 
-        micId = particle.getMicId()
+        micId = id if id is not None else particle.getMicId()
         ctfModel = particle.getCTF()
         acquisition = particle.getAcquisition()
         transform = particle.getTransform()
