@@ -72,7 +72,7 @@ class FrealignParFileBase(object):
 
 class MinimalFrealignParFile(FrealignParFileBase):
     COLUMNS = [
-        { 'name': 'mic_id',         'header': '  ',         'format': '{:<4d}',     'type': int},
+        { 'name': 'mic_id',         'header': '    ',       'format': '{:<6d}',     'type': int},
         { 'name': 'defocus_u',      'header': 'DF1     ',   'format': '{:<8.2f}',   'type': float},
         { 'name': 'defocus_v',      'header': 'DF2     ',   'format': '{:<8.2f}',   'type': float},
         { 'name': 'defocus_angle',  'header': 'ANGAST  ',   'format': '{:<8.2f}',   'type': float},
@@ -112,7 +112,7 @@ class MinimalFrealignParFile(FrealignParFileBase):
 
 class FullFrealignParFile(FrealignParFileBase):
     COLUMNS = [
-        { 'name': 'mic_id',         'header': '  ',         'format': '{:<4d}',     'type': int},
+        { 'name': 'mic_id',         'header': '    ',       'format': '{:<6d}',     'type': int},
         { 'name': 'psi',            'header': 'PSI     ',   'format': '{:<8.2f}',   'type': float},
         { 'name': 'theta',          'header': 'THETA   ',   'format': '{:<8.2f}',   'type': float},
         { 'name': 'phi',            'header': 'PHI     ',   'format': '{:<8.2f}',   'type': float},
