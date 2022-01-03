@@ -22,8 +22,8 @@
 # *
 # **************************************************************************
 
+from pwem.constants import ALIGN_PROJ
 from pwem.emlib.image.image_handler import ImageHandler
-from pwem.objects.data import Particle, SetOfParticles
 from pyworkflow.protocol.constants import LEVEL_ADVANCED, STEPS_PARALLEL
 from pyworkflow.protocol.params import EnumParam, MultiPointerParam, PointerParam, FloatParam, IntParam, BooleanParam, StringParam
 from pyworkflow.protocol.params import LT, LE, GE, GT, Range
@@ -33,11 +33,7 @@ from pyworkflow.utils.path import copyFile, makePath, createLink, cleanPattern, 
 from pwem.protocols import ProtClassify3D
 
 from cistem import Plugin
-from cistem.convert import FullFrealignParFile, boolToYN
-
-import math
-import multiprocessing as mp
-import numpy as np
+from cistem.convert import FullFrealignParFile, ClassesLoader, boolToYN
 
 class CistemProt3DClassification(ProtClassify3D):
     """ Classify particles into 3d classes """
@@ -219,7 +215,7 @@ class CistemProt3DClassification(ProtClassify3D):
         nCycles = self.cycleCount.get()
         nClasses = len(self.input_initialVolumes)
         nParticles = len(self.input_particles.get())
-        nWorkers = max(int(self.numberOfMpi), int(self.numberOfThreads))
+        nWorkers = max(max(int(self.numberOfMpi), int(self.numberOfThreads))-1, 1)
         self.workDistribution = distribute_work(nParticles, nWorkers)
         nBlocks = len(self.workDistribution)
         
@@ -237,7 +233,7 @@ class CistemProt3DClassification(ProtClassify3D):
             prerequisites = self._insertMonoBlockSteps(nCycles, nClasses)
 
         # Generate the output TODO WIP
-        #self._insertFunctionStep('createOutputStep', prerequisites=prerequisites)
+        self._insertFunctionStep('createOutputStep', nCycles, nClasses, nBlocks, prerequisites=prerequisites)
 
     # --------------------------- STEPS functions -----------------------------
     
@@ -332,27 +328,29 @@ class CistemProt3DClassification(ProtClassify3D):
             self._getExtraPath(self._getFileName('output_statistics', iter=iter, cls=cls))
         )
 
-    def createOutputStep(self, nClasses):
+    def createOutputStep(self, nCycles, nClasses, nBlocks):
         particles = self.input_particles.get()
         
         # Create a SetOfClasses3D
-        classes3D = self._createSetOfClasses3D(particles)
-        self._fillClassesFromIter(classes3D)
+        classes = self._createSetOfClasses3D(particles)
+        self._fillClassesFromIter(classes, nClasses, nBlocks, nCycles-1)
         
-        self._defineOutputs(outputClasses=classes3D)
-        self._defineSourceRelation(self.input_particles, classes3D)
+        self._defineOutputs(outputClasses=classes)
+        self._defineSourceRelation(self.input_particles, classes)
+        self._defineSourceRelation(self.input_initialVolumes, classes)
 
         # Create a SetOfVolumes and define its relations
         volumes = self._createSetOfVolumes()
         volumes.setSamplingRate(particles.getSamplingRate())
         
-        for class3D in classes3D:
-            vol = class3D.getRepresentative()
-            vol.setObjId(class3D.getObjId())
+        for cls in classes:
+            vol = cls.getRepresentative()
+            vol.setObjId(cls.getObjId())
             volumes.append(vol)
         
         self._defineOutputs(outputVolumes=volumes)
-        self._defineSourceRelation(self.inputParticles, volumes)
+        self._defineSourceRelation(self.input_particles, volumes)
+        self._defineSourceRelation(self.input_initialVolumes, volumes)
 
     # --------------------------- INFO functions ------------------------------
     def _validate(self):
@@ -443,7 +441,8 @@ class CistemProt3DClassification(ProtClassify3D):
 
         extraDirectories = [
             'Reconstructions',
-            'Statistics'
+            'Statistics',
+            'Classifications'
         ]
         
         for d in tmpDirectories:
@@ -724,7 +723,7 @@ eof
             'score_threshold': self.reconstruction_scoreThreshold.get(),
             'smoothing_factor': self.reconstruction_smoothingFactor.get(),
             'padding': 1.0,
-            'normalize_particles': boolToYN(True),
+            'normalize_particles': boolToYN(False), # Does not work if True
             'invert_contrast': boolToYN(inputParticles.isPhaseFlipped()), # TODO determine is white protein
             'exclude_blank_edges': boolToYN(False),
             'adjust_scores': boolToYN(self.reconstruction_adjustScore4Defocus.get()),
@@ -776,9 +775,15 @@ eof
             'number_of_dump_files': nJobs,
         }
 
-    def _copyTempFiles(self, nIter, nClasses, nJobs):
-        pass
-
+    def _fillClassesFromIter(self, clsSet, nClasses, nBlocks, iteration):
+        """ Create the SetOfClasses3D from a given iteration. """
+        classLoader = ClassesLoader(
+            [self._getExtraPath(self._getFileName('output_volume', iter=iteration, cls=cls)) for cls in range(nClasses)],
+            [self._getExtraPath(self._getFileName('output_statistics', iter=iteration, cls=cls)) for cls in range(nClasses)],
+            [[self._getTmpPath(self._getFileName('classify_output_parameters', iter=iteration, cls=cls, job=job)) for job in range(nBlocks)] for cls in range(nClasses)],
+            ALIGN_PROJ
+        )
+        classLoader.fillClasses(clsSet)
 
 
 def distribute_work(n, m):
@@ -810,10 +815,4 @@ def distribute_work(n, m):
     assert(result[-1][1] == n) # End at n
     assert(len(result) <= m) # At most m groups
 
-    return result
-
-def flatten(x):
-    result = []
-    for sublist in x:
-        result.extend(sublist)
     return result
