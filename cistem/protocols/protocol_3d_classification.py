@@ -266,7 +266,7 @@ class CistemProt3DClassification(ProtClassify3D):
             # Modify the refinement to only include the best class
             for cls in range(len(refinement)):
                 refinement[cls][i]['magnification'] = 0.0
-                refinement[cls][i]['film'] = 1 if cls == bestCls else 0 # Used as include
+                refinement[cls][i]['film'] = 1 if cls == bestCls else -1 # Used as include >= 0 <=> True
                 refinement[cls][i]['change'] = 0.0
 
 
