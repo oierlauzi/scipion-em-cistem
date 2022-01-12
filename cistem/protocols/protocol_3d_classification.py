@@ -35,6 +35,8 @@ from pwem.protocols import ProtClassify3D
 from cistem import Plugin
 from cistem.convert import FullFrealignParFile, ClassesLoader, boolToYN
 
+import math
+
 class CistemProt3DClassification(ProtClassify3D):
     """ Classify particles into 3d classes """
     _label = '3d classification'
@@ -64,7 +66,8 @@ class CistemProt3DClassification(ProtClassify3D):
             'refine3d_output_matching_projections': f'Refine3D/Projections/output_matching_projections_{iterFmt}_{classFmt}_{jobFmt}.mrc',
             'refine3d_output_parameters': f'Refine3D/Parameters/output_parameters_{iterFmt}_{classFmt}_{jobFmt}.par',
             'refine3d_output_shifts': f'Refine3D/Parameters/output_shifts_{iterFmt}_{classFmt}_{jobFmt}.par',
-            'classify_output_parameters': f'Classify/Parameters/output_parameters_{iterFmt}_{classFmt}_{jobFmt}.par',
+            'classify_output_parameters': f'Classify/Parameters/classify_output_{iterFmt}.par',
+            'classify_output_class_parameters': f'Classify/Parameters/output_class_parameters_{iterFmt}_{classFmt}.par',
             'reconstruct3d_input_parameters': f'Reconstruct3D/Parameters/input_parameters_{iterFmt}_{classFmt}_{jobFmt}.par',
             'reconstruct3d_input_reconstruction': f'Reconstruct3D/Reconstructions/input_reconstruction_{iterFmt}_{classFmt}.mrc',
             'reconstruct3d_output_reconstruction': f'Reconstruct3D/Reconstructions/output_reconstruction_{iterFmt}_{classFmt}_{reconstructionNameFmt}_{jobFmt}.mrc',
@@ -74,7 +77,8 @@ class CistemProt3DClassification(ProtClassify3D):
             'merge3d_output_reconstruction': f'Merge3D/Reconstructions/output_reconstruction_{iterFmt}_{classFmt}_{reconstructionNameFmt}.mrc',
             'merge3d_output_statistics': f'Merge3D/Statistics/output_resolution_statistics_{iterFmt}_{classFmt}.txt',
             'output_volume': f'Reconstructions/output_volume_{iterFmt}_{classFmt}.mrc',
-            'output_statistics': f'Statistics/output_statistics_{iterFmt}_{classFmt}.txt'
+            'output_statistics': f'Statistics/output_statistics_{iterFmt}_{classFmt}.txt',
+            'output_classification': f'Classifications/output_classification_{iterFmt}.txt'
         }
         self._updateFilenamesDict(myDict)
     # --------------------------- DEFINE param functions ----------------------
@@ -252,34 +256,20 @@ class CistemProt3DClassification(ProtClassify3D):
         args = self._getRefineArgTemplate() % self._getRefineArgDictionary(iter, cls, job)
         self.runJob(refine3d, args, cwd=self._getTmpPath(), env=Plugin.getEnviron())
 
-    def classifyStep(self, nClasses, iter, job):
-        refinement = self._readRefinementParameters(nClasses, iter, job)
-
-        # Perform the classification
-        for i in range(len(refinement[0])):
-            # Determine the best class
-            bestCls = 0
-            for cls in range(1, len(refinement)):
-                if refinement[cls][i]['score'] > refinement[bestCls][i]['score']:
-                    bestCls = cls
-
-            # Modify the refinement to only include the best class
-            for cls in range(len(refinement)):
-                refinement[cls][i]['magnification'] = 0.0
-                refinement[cls][i]['film'] = 1 if cls == bestCls else -1 # Used as include >= 0 <=> True
-                refinement[cls][i]['change'] = 0.0
-
-
-            # Store the results
-            self.lastClassification[refinement[0][i]['mic_id'] - 1] = bestCls # mic_id holds stack position
+    def classifyStep(self, nClasses, nJobs, iter):
+        refinement = self._readRefinementParameters(nClasses, nJobs, iter)
+        self._updateOccupancyValues(refinement)
+        classification = self._classifyRefinement(refinement)
 
         # Write the results to disk
-        for cls, particles in enumerate(refinement):
-            path = self._getTmpPath(self._getFileName('classify_output_parameters', iter=iter, cls=cls, job=job))
-            with FullFrealignParFile(path, 'w') as f:
-                f.writeHeader()
-                for particle in particles:
-                    f.writeRow(particle)
+        self._writeClassification(iter, classification)
+        self._writeClassParameters(iter, refinement, classification)
+
+        # Copy output classification
+        copyFile(
+            self._getTmpPath(self._getFileName('classify_output_parameters', iter=iter)),
+            self._getExtraPath(self._getFileName('output_classification', iter=iter))
+        )
 
     def reconstructStep(self, iter, cls, job):
         # Shorthands for variables
@@ -377,13 +367,13 @@ class CistemProt3DClassification(ProtClassify3D):
 
             # Classify according to the result of the refinement
             prerequisites = refineSteps # Depend on all previous refinements referring to this job
-            self._insertFunctionStep('classifyStep', nClasses, i, 0, prerequisites=prerequisites)
+            self._insertFunctionStep('classifyStep', nClasses, 1, i, prerequisites=prerequisites)
             classifySteps = [len(self._steps)]
 
             # Reconstruct each class
             reconstructSteps = [0]*nClasses
             for j in range(nClasses):
-                prerequisites = classifySteps # Depend on the classification referring to this job
+                prerequisites = classifySteps # Depend on the classification
                 self._insertFunctionStep('reconstructAllStep', i, j, prerequisites=prerequisites)
                 reconstructSteps[j] = len(self._steps)
 
@@ -402,17 +392,15 @@ class CistemProt3DClassification(ProtClassify3D):
                     refineSteps[j][k] = len(self._steps)
 
             # Classify according to the result of the refinement
-            classifySteps = [0]*nJobs
-            for j in range(nJobs):
-                prerequisites = [refineSteps[k][j] for k in range(nClasses)] # Depend on all previous refinements referring to this job
-                self._insertFunctionStep('classifyStep', nClasses, i, j, prerequisites=prerequisites)
-                classifySteps[j] = len(self._steps)
+            prerequisites = [item for sublist in refineSteps for item in sublist] # All refinements
+            self._insertFunctionStep('classifyStep', nClasses, nJobs, i, prerequisites=prerequisites)
+            classifySteps = [len(self._steps)]
 
             # Reconstruct each class
             for j in range(nClasses):
                 reconstructSteps = [0]*nJobs
                 for k in range(nJobs):
-                    prerequisites = [classifySteps[k]] # Depend on the classification referring to this job
+                    prerequisites = classifySteps # Depend on the classification
                     self._insertFunctionStep('reconstructStep', i, j, k, prerequisites=prerequisites)
                     reconstructSteps[k] = len(self._steps)
                 
@@ -616,23 +604,97 @@ eof
             'threshold_input_3d': boolToYN(True),
         }
 
-    def _readRefinementParameters(self, nClasses, iter, job):
+    def _readRefinementParameters(self, nClasses, nJobs, iter):
         parameters = [[] for _ in range(nClasses)]
 
         # Read all the putput parameters
         for cls in range(nClasses):
-            path = self._getTmpPath(self._getFileName('refine3d_output_parameters', iter=iter, cls=cls, job=job))
+            for job in range(nJobs):
+                path = self._getTmpPath(self._getFileName('refine3d_output_parameters', iter=iter, cls=cls, job=job))
 
-            # Read an entire file
-            with FullFrealignParFile(path, 'r') as f:
-                for row in f:
-                    parameters[cls].append(row)
+                # Read an entire file
+                with FullFrealignParFile(path, 'r') as f:
+                    for row in f:
+                        parameters[cls].append(row)
 
         # Ensure that everything was read
         for i in range(1, len(parameters)):
             assert(len(parameters[i]) == len(parameters[0]))
 
         return parameters
+
+    def _calculateRefinementParameterAverage(self, refinement, parameter):
+        sum = 0
+        for row in refinement:
+            sum += row[parameter]
+        return sum / len(refinement)
+
+    def _updateOccupancyValues(self, refinement):
+        nClasses = len(refinement)
+        nParticles = len(refinement[0])
+        averageOccupancies = [self._calculateRefinementParameterAverage(cls, 'occupancy') for cls in refinement]
+
+        for i in range(nParticles):
+            # Find the greatest logP value
+            maxLogP = refinement[0][i]['log_p']
+            for j in range(1, nClasses):
+                value = refinement[j][i]['log_p']
+                if value > maxLogP:
+                    maxLogP = value
+
+            # Calculate the difference of the actual logP value respect the maximum one
+            deltaLogP = [maxLogP - refinement[j][i]['log_p'] for j in range(nClasses)]
+
+            # Calculate the occupancies
+            occupancies = [averageOccupancies[j] * math.exp(-deltaLogP[j]) if deltaLogP[j] < 10 else 0 for j in range(nClasses)]
+            occupancies = [x/sum(occupancies) for x in occupancies]
+
+            # Average sigma 
+            averageSigma = 0
+            for j in range(nClasses):
+                averageSigma += refinement[j][i]['sigma']*occupancies[j]
+
+            # Write the results
+            for j in range(nClasses):
+                refinement[j][i]['sigma'] = averageSigma
+                refinement[j][i]['occupancy'] = occupancies[j]*100
+
+    def _classifyRefinement(self, refinement):
+        result = []
+        
+        # Perform the classification
+        for i in range(len(refinement[0])):
+            # Determine the best class
+            bestCls = 0
+            for cls in range(1, len(refinement)):
+                if refinement[cls][i]['occupancy'] > refinement[bestCls][i]['occupancy']:
+                    bestCls = cls
+
+            # Store it
+            row = refinement[bestCls][i].copy()
+            row['film'] = bestCls
+            result.append(row)
+
+        return result
+
+    def _writeClassification(self, iter, classification):
+        path = self._getTmpPath(self._getFileName('classify_output_parameters', iter=iter))
+        with FullFrealignParFile(path, 'w') as f:
+            f.writeHeader()
+            for row in classification:
+                f.writeRow(row)
+
+    def _writeClassParameters(self, iter, refinement, classification):
+        for cls, _ in enumerate(refinement):
+            path = self._getTmpPath(self._getFileName('classify_output_class_parameters', iter=iter, cls=cls))
+            with FullFrealignParFile(path, 'w') as f:
+                f.writeHeader()
+                for refinementRow, classificationRow in zip(refinement[cls], classification):
+                    row = refinementRow.copy()
+                    row['film'] = 1 if classificationRow['film'] == cls else -1 # Selectively enable
+                    row['magnification'] = 0.0
+                    row['change'] = 0.0
+                    f.writeRow(row)
 
     def _prepareReconstruct(self, iter, cls, job):
         if iter == 0:
@@ -650,7 +712,7 @@ eof
 
         # Use the parameters provided by the previous step
         createLink(
-            self._getTmpPath(self._getFileName('classify_output_parameters', iter=iter, cls=cls, job=job)),
+            self._getTmpPath(self._getFileName('classify_output_class_parameters', iter=iter, cls=cls)),
             self._getTmpPath(self._getFileName('reconstruct3d_input_parameters', iter=iter, cls=cls, job=job))
         )
 
@@ -780,7 +842,7 @@ eof
         classLoader = ClassesLoader(
             [self._getExtraPath(self._getFileName('output_volume', iter=iteration, cls=cls)) for cls in range(nClasses)],
             [self._getExtraPath(self._getFileName('output_statistics', iter=iteration, cls=cls)) for cls in range(nClasses)],
-            [[self._getTmpPath(self._getFileName('classify_output_parameters', iter=iteration, cls=cls, job=job)) for job in range(nBlocks)] for cls in range(nClasses)],
+            self._getExtraPath(self._getFileName('output_classification', iter=iteration)),
             ALIGN_PROJ
         )
         classLoader.fillClasses(clsSet)

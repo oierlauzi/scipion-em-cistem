@@ -8,21 +8,20 @@ class ClassesLoader:
     """ Helper class to read classes information from star files produced
     by Cistem classification runs (2D or 3D).
     """
-    def __init__(self, repPaths, statisticsPaths, particleDataPaths, alignment):
+    def __init__(self, repPaths, statisticsPaths, particleDataPath, alignment):
         from . import FullFrealignParFile, FrealignStatisticsFile
         self._classRepresentatives = repPaths
         self._classStatistics = [FrealignStatisticsFile(p, 'r') for p in statisticsPaths]
-        self._particleData = [[FullFrealignParFile(p, 'r') for p in c] for c in particleDataPaths]
+        self._particleData = FullFrealignParFile(particleDataPath, 'r')
         self._alignment = alignment
 
     def fillClasses(self, clsSet):
         clsSet.classifyItems(updateItemCallback=self._updateParticle,
                              updateClassCallback=self._updateClass,
-                             itemDataIterator=self._buildParticleIter(),
+                             itemDataIterator=iter(self._particleData),
                              doClone=False)
 
     def _updateParticle(self, item, row):
-        row = self._processRow(row) # Select only the active class
         self._updateClassId(item, row)
         self._updateCtf(item, row)
         self._updateTransform(item, row)
@@ -34,7 +33,7 @@ class ClassesLoader:
         #    self._reader.setExtraLabels(item, row)
 
     def _updateClassId(self, item, row):
-        item.setClassId(row['class_id']+1)
+        item.setClassId(row['film']+1)
 
     def _updateCtf(self, item, row):
         if not item.hasCTF():
@@ -58,21 +57,3 @@ class ClassesLoader:
         classId = item.getObjId()
         item.setAlignment(self._alignment)
         item.getRepresentative().setLocation(self._classRepresentatives[classId-1])
-
-    def _buildParticleIter(self):
-        from itertools import chain
-        clsIterators = [chain.from_iterable(c) for c in self._particleData] # Chain all the paths for a given class
-        return iter(zip(*clsIterators))
-
-    def _processRow(self, row):
-        # Selects the active class in the row
-        result = None
-
-        for i, subrow in enumerate(row):
-            if(subrow['film'] == 1): # used as include
-                assert(result is None) # Only 1 be set
-                result = subrow
-                result['class_id'] = i
-
-        assert(result is not None) # Should be set
-        return result
