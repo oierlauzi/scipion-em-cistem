@@ -92,7 +92,8 @@ class CistemProt3DClassification(ProtClassify3D):
                         'Classification will output a disctinct class for each of these volumes')
         form.addParam('input_molecularMass', FloatParam, label='Molecular mass (kDa)',
                         default=100.0, validators=[GT(0)]) # TODO default
-
+        form.addParam('input_isWhite', BooleanParam, label='Is white protein',
+                        default=True)
 
         form.addSection(label='Refinement')
         form.addParam('cycleCount', IntParam, label='Cycle Count',
@@ -223,9 +224,6 @@ class CistemProt3DClassification(ProtClassify3D):
         self.workDistribution = distribute_work(nParticles, nWorkers)
         nBlocks = len(self.workDistribution)
         
-        # Initialize the last classification field
-        self.lastClassification = [-1] * nParticles
-
         # Initialize required files for the first iteration
         self._insertFunctionStep('convertInputStep')
 
@@ -236,7 +234,7 @@ class CistemProt3DClassification(ProtClassify3D):
         else:
             prerequisites = self._insertMonoBlockSteps(nCycles, nClasses)
 
-        # Generate the output TODO WIP
+        # Generate the output
         self._insertFunctionStep('createOutputStep', nCycles, nClasses, nBlocks, prerequisites=prerequisites)
 
     # --------------------------- STEPS functions -----------------------------
@@ -598,7 +596,7 @@ eof
             'apply_2D_masking': boolToYN(self.classification_enableFocus.get()),
             'ctf_refinement': boolToYN(self.ctf_enable.get()),
             'normalize_particles': boolToYN(True),
-            'invert_contrast': boolToYN(inputParticles.isPhaseFlipped()), # TODO determine has white protein
+            'invert_contrast': boolToYN(self.input_isWhite.get()),
             'exclude_blank_edges': boolToYN(False), 
             'normalize_input_3d': boolToYN(not self.reconstruction_enableLikelihoodBlurring.get()),
             'threshold_input_3d': boolToYN(True),
@@ -785,8 +783,8 @@ eof
             'score_threshold': self.reconstruction_scoreThreshold.get(),
             'smoothing_factor': self.reconstruction_smoothingFactor.get(),
             'padding': 1.0,
-            'normalize_particles': boolToYN(False), # Does not work if True
-            'invert_contrast': boolToYN(inputParticles.isPhaseFlipped()), # TODO determine is white protein
+            'normalize_particles': boolToYN(True), # Does not work if True
+            'invert_contrast': boolToYN(self.input_isWhite.get()),
             'exclude_blank_edges': boolToYN(False),
             'adjust_scores': boolToYN(self.reconstruction_adjustScore4Defocus.get()),
             'crop_images': boolToYN(self.reconstruction_enableAutoCrop.get()),
