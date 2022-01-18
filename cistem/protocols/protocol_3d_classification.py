@@ -22,6 +22,7 @@
 # *
 # **************************************************************************
 
+from random import choices
 from pwem.constants import ALIGN_PROJ
 from pwem.emlib.image.image_handler import ImageHandler
 from pyworkflow.protocol.constants import LEVEL_ADVANCED, STEPS_PARALLEL
@@ -144,6 +145,8 @@ class CistemProt3DClassification(ProtClassify3D):
 
 
         form.addSection(label='Classification')
+        form.addParam('classification_criteria', EnumParam, choices=['Occupancy', 'Score'], label='Criteria',
+                        default=0)
         form.addParam('classification_resLimit', FloatParam, label='Resolution Limit (Å)',
                         help='Resolution limit for classification. Use 0.0 for maximum',
                         default=30.0, validators=[GE(0)])
@@ -255,9 +258,11 @@ class CistemProt3DClassification(ProtClassify3D):
         self.runJob(refine3d, args, cwd=self._getTmpPath(), env=Plugin.getEnviron())
 
     def classifyStep(self, nClasses, nJobs, iter):
+        criteria = 'score' if self.classification_criteria.get() == 1 else 'occupancy'
+
         refinement = self._readRefinementParameters(nClasses, nJobs, iter)
         self._updateOccupancyValues(refinement)
-        classification = self._classifyRefinement(refinement)
+        classification = self._classifyRefinement(refinement, criteria)
 
         # Write the results to disk
         self._writeClassification(iter, classification)
@@ -657,7 +662,7 @@ eof
                 refinement[j][i]['sigma'] = averageSigma
                 refinement[j][i]['occupancy'] = occupancies[j]*100
 
-    def _classifyRefinement(self, refinement):
+    def _classifyRefinement(self, refinement, criteria):
         result = []
         
         # Perform the classification
@@ -665,7 +670,7 @@ eof
             # Determine the best class
             bestCls = 0
             for cls in range(1, len(refinement)):
-                if refinement[cls][i]['occupancy'] > refinement[bestCls][i]['occupancy']:
+                if refinement[cls][i][criteria] > refinement[bestCls][i][criteria]:
                     bestCls = cls
 
             # Store it
