@@ -225,7 +225,7 @@ class CistemProt3DClassification(ProtClassify3D):
         nBlocks = len(self.workDistribution)
         
         # Initialize required files for the first iteration
-        self._insertFunctionStep('convertInputStep')
+        self._insertFunctionStep('convertInputStep', nClasses)
 
         # Execute the pipeline in multiple depending on the parallelization strategy
         prerequisites = []
@@ -239,10 +239,10 @@ class CistemProt3DClassification(ProtClassify3D):
 
     # --------------------------- STEPS functions -----------------------------
     
-    def convertInputStep(self):
+    def convertInputStep(self, nClasses):
         self._createWorkingDir()
         self._createInputParticleStack()
-        self._createInputParameters()
+        self._createInputParameters(nClasses)
         self._createInputInitialVolumes()
     
     def refineStep(self, iter, cls, job):
@@ -442,14 +442,14 @@ class CistemProt3DClassification(ProtClassify3D):
         path = self._getTmpPath(self._getFileName('input_particles'))
         particles.writeStack(path)
 
-    def _createInputParameters(self):
+    def _createInputParameters(self, nClasses):
         particles = self.input_particles.get()
         path = self._getTmpPath(self._getFileName('input_parameters'))
 
         with FullFrealignParFile(path, 'w') as f:
             f.writeHeader()
             for i, particle in enumerate(particles):
-                f.writeParticle(particle, i+1) # Use its 1-based index as the mic_id
+                f.writeParticle(particle, id=i+1, occupancy=100.0/nClasses) # Use its 1-based index as the mic_id
 
     def _createInputInitialVolumes(self):
         initialVolumes = self.input_initialVolumes
@@ -783,7 +783,7 @@ eof
             'score_threshold': self.reconstruction_scoreThreshold.get(),
             'smoothing_factor': self.reconstruction_smoothingFactor.get(),
             'padding': 1.0,
-            'normalize_particles': boolToYN(True), # Does not work if True
+            'normalize_particles': boolToYN(False), # Does not work if True
             'invert_contrast': boolToYN(self.input_isWhite.get()),
             'exclude_blank_edges': boolToYN(False),
             'adjust_scores': boolToYN(self.reconstruction_adjustScore4Defocus.get()),

@@ -134,7 +134,7 @@ class FullFrealignParFile(FrealignParFileBase):
     def __init__(self, path, mode):
         FrealignParFileBase.__init__(self, path, mode, self.COLUMNS)
 
-    def writeParticle(self, particle, id=None):
+    def writeParticle(self, particle, id=None, occupancy=None, logP=None, sigma=None):
         from .convert import geometryFromMatrix
 
         micId = id if id is not None else particle.getMicId()
@@ -160,10 +160,13 @@ class FullFrealignParFile(FrealignParFileBase):
         (dfU, dfV, dfAngle) = ctfModel.getDefocus() if ctfModel is not None else (0, 0, 0)
 
         # Initialize the refinement data
+        if occupancy is None:
+            occupancy = 100
+        if logP is None:
+            logP = 0
+        if sigma is None:
+            sigma = 0.5
         pShift = 0
-        occupancy = 100
-        logP = 0
-        sigma = 0.5
         score = 0
         change = 0
 
