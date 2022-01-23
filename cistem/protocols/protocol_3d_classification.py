@@ -608,7 +608,7 @@ eof
         }
 
     def _readRefinementParameters(self, nClasses, nJobs, iter):
-        parameters = [[] for _ in range(nClasses)]
+        result = [[] for _ in range(nClasses)]
 
         # Read all the putput parameters
         for cls in range(nClasses):
@@ -618,13 +618,13 @@ eof
                 # Read an entire file
                 with FullFrealignParFile(path, 'r') as f:
                     for row in f:
-                        parameters[cls].append(row)
+                        result[cls].append(row)
 
         # Ensure that everything was read
-        for i in range(1, len(parameters)):
-            assert(len(parameters[i]) == len(parameters[0]))
-
-        return parameters
+        assert(len(result) == nClasses)
+        for i in range(1, len(result)):
+            assert(len(result[i]) == len(result[0]))
+        return result
 
     def _calculateRefinementParameterAverage(self, refinement, parameter):
         sum = 0
@@ -649,7 +649,7 @@ eof
             deltaLogP = [maxLogP - refinement[j][i]['log_p'] for j in range(nClasses)]
 
             # Calculate the occupancies
-            occupancies = [averageOccupancies[j] * math.exp(-deltaLogP[j]) if deltaLogP[j] < 10 else 0 for j in range(nClasses)]
+            occupancies = [averageOccupancies[j] * math.exp(-deltaLogP[j]) if deltaLogP[j] < 10 else 0 for j in range(nClasses)] # TODO maybe skip the if-else part and always use exp
             occupancies = [x/sum(occupancies) for x in occupancies]
 
             # Average sigma 
@@ -678,6 +678,7 @@ eof
             row['film'] = bestCls
             result.append(row)
 
+        assert(len(result) == len(refinement[0]))
         return result
 
     def _writeClassification(self, iter, classification):
