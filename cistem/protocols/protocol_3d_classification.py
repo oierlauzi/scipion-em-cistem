@@ -183,7 +183,8 @@ class CistemProt3DClassification(ProtClassify3D):
         form.addParam('reconstruction_adjustScore4Defocus', BooleanParam, label='Adjust score for defocus',
                         default=True, expertLevel=LEVEL_ADVANCED)
         form.addParam('reconstruction_scoreThreshold', FloatParam, label='Score threshold',
-                        default=0.0, validators=[GE(0)], expertLevel=LEVEL_ADVANCED)
+                        default=0.0, validators=[GE(0)], expertLevel=LEVEL_ADVANCED,
+                        help='0 for disabling threshold. (0.0-1.0) for percentile. Otherwise the value as is will be used as a filter')
         form.addParam('reconstruction_resLimit', FloatParam, label='Resolution limit (Å²)',
                         default=0.0, validators=[GE(0)], expertLevel=LEVEL_ADVANCED)
         form.addParam('reconstruction_enableAutoCrop', BooleanParam, label='Enable auto cropping images',
@@ -258,10 +259,13 @@ class CistemProt3DClassification(ProtClassify3D):
         self.runJob(refine3d, args, cwd=self._getTmpPath(), env=Plugin.getEnviron())
 
     def classifyStep(self, nClasses, nJobs, iter):
-        criteria = 'score' if self.classification_criteria.get() == 1 else 'occupancy'
-
+        # Read the refinement data performed by the previous step(s)
         refinement = self._readRefinementParameters(nClasses, nJobs, iter)
-        self._updateOccupancyValues(refinement)
+
+        # Perform the classification according to the selected criteria
+        criteria = 'score' if self.classification_criteria.get() == 1 else 'occupancy'
+        if criteria == 'occupancy':
+            self._updateOccupancyValues(refinement)
         classification = self._classifyRefinement(refinement, criteria)
 
         # Write the results to disk
