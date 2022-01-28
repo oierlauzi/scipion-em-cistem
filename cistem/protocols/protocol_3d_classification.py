@@ -249,7 +249,6 @@ class CistemProt3DClassification(ProtClassify3D):
                         '-Score: The class with the highest score parameter is selected '
                         'for each particle')
         form.addParam('classification_resLimit', FloatParam, label='Resolution Limit (Å)',
-                        help='Resolution limit for classification. Use 0.0 for maximum',
                         default=30.0, validators=[GE(0)],
                         help='The limit set here is analogous to the high-resolution limit '
                         'set for refinement. It cannot exceed the refinement limit. Setting '
