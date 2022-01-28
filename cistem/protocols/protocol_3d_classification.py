@@ -521,7 +521,7 @@ class CistemProt3DClassification(ProtClassify3D):
     def _validate(self):
         result = []
 
-        if self.classification_resLimit.get() > self.refine_highResLimit.get():
+        if self.classification_resLimit.get() < self.refine_highResLimit.get():
             result.append('Classification resolution limit can not exceed refinement high resolution limit')
 
         return result
