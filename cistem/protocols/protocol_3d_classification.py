@@ -857,8 +857,8 @@ eof
 
 
 def distribute_work(n, m):
-    """ Given an n, it distributes it into at most m similarly sized groups. It returns a list 
-    with the [first, last) elements of each group"""
+    """ Given n items, it distributes it into at most m similarly sized groups. It returns a list 
+    with the [first, last) elements of each group as the tuple (first, last)"""
 
     # Obtain the quotient and the reminder of dividing n by m
     q, r = divmod(n, m)
