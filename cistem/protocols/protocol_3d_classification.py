@@ -103,7 +103,6 @@ class CistemProt3DClassification(ProtClassify3D):
 
         form.addSection(label='Refinement')
         form.addParam('cycleCount', IntParam, label='Cycle Count',
-                        help='Number of refinement cycles to be executed',
                         default=1, validators=[GE(1)],
                         help='The number of refinement cycles to run. For a global search, '
                         'one is usually sufficient, possibly followed by another one at a '
