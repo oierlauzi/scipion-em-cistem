@@ -92,18 +92,36 @@ class CistemProt3DClassification(ProtClassify3D):
                         help='Initial volumes that serve as a reference for the classification. '
                         'Classification will output a disctinct class for each of these volumes')
         form.addParam('input_molecularMass', FloatParam, label='Molecular mass (kDa)',
-                        default=100.0, validators=[GT(0)]) # TODO default
+                        default=100.0, validators=[GT(0)],
+                        help='Estimated molecular mass of the proteins. In general this should be '
+                        'the molecular mass of the coherent parts (e.g. micelle would not be '
+                        'included)')
         form.addParam('input_isWhite', BooleanParam, label='Is white protein',
-                        default=True)
+                        default=True, 
+                        help='Specifies if the input particles are in \'negative\'. '
+                        'By default Scipion uses white proteins')
 
         form.addSection(label='Refinement')
         form.addParam('cycleCount', IntParam, label='Cycle Count',
                         help='Number of refinement cycles to be executed',
-                        default=1, validators=[GE(1)])
+                        default=1, validators=[GE(1)],
+                        help='The number of refinement cycles to run. For a global search, '
+                        'one is usually sufficient, possibly followed by another one at a '
+                        'later stage in the refinement if the user suspects that the initial '
+                        'reference was limited in quality such that a significant number of '
+                        'particles were misaligned. For local refinement of a single class, '
+                        'typically 3 to 5 cycles are sufficient, possibly followed by another '
+                        'local refinement at increased resolution (see below). If multiple '
+                        'classes are refined, between 30 and 50 cycles should be run to ensure '
+                        'convergence of the classes.')
         form.addParam('refine_type', EnumParam, choices=['Local', 'Global'], label='Refinement type',
-                        default=0)
+                        default=0,
+                        help='If no starting parameters from a previous refinement are available, '
+                        'they have to be determined in a global search (slow); '
+                        'otherwise it is usually sufficient to perform local refinement (fast).')
         form.addParam('refine_symmetry', StringParam, label='Symmetry',
-                        default='c1')
+                        default='c1',
+                        help='Symmetry of the proteins to be refined')
         group = form.addGroup('Refinement parameters', help='Parameters to be refined',
                                 expertLevel=LEVEL_ADVANCED)
         group.addParam('refine_psi', BooleanParam, label='ψ',
@@ -117,83 +135,235 @@ class CistemProt3DClassification(ProtClassify3D):
         group.addParam('refine_yShift', BooleanParam, label='Y shift',
                         default=True, expertLevel=LEVEL_ADVANCED)
         form.addParam('refine_lowResLimit', FloatParam, label='Low resolution limit (Å)',
-                        default=225.0, validators=[GT(0)], expertLevel=LEVEL_ADVANCED)
+                        default=225.0, validators=[GT(0)], expertLevel=LEVEL_ADVANCED,
+                        help='The data used for refinement is usually bandpass-limited '
+                        'to exclude spurious low-resolution features in the particle '
+                        'background (set by the low-resolution limit) and high-resolution '
+                        'noise (set by the high-resolution limit). It is good practice '
+                        'to set the low-resolution limit to 2.5x the approximate '
+                        'particle mask radius. The high-resolution limit should remain '
+                        'significantly below the resolution of the reference used for '
+                        'refinement to enable unbiased resolution estimation using the '
+                        'Fourier Shell Correlation curve.')
         form.addParam('refine_highResLimit', FloatParam, label='High resolution limit (Å)',
-                        default=8.0, validators=[GT(0)], expertLevel=LEVEL_ADVANCED)
+                        default=8.0, validators=[GT(0)], expertLevel=LEVEL_ADVANCED,
+                        help='The data used for refinement is usually bandpass-limited '
+                        'to exclude spurious low-resolution features in the particle '
+                        'background (set by the low-resolution limit) and high-resolution '
+                        'noise (set by the high-resolution limit). It is good practice '
+                        'to set the low-resolution limit to 2.5x the approximate '
+                        'particle mask radius. The high-resolution limit should remain '
+                        'significantly below the resolution of the reference used for '
+                        'refinement to enable unbiased resolution estimation using the '
+                        'Fourier Shell Correlation curve.')
         form.addParam('refine_outerMaskRadius', FloatParam, label='Outer mask radius (Å)',
-                        default=97.5, validators=[GE(0)], expertLevel=LEVEL_ADVANCED)
+                        default=97.5, validators=[GE(0)], expertLevel=LEVEL_ADVANCED,
+                        help='The radius of the circular mask applied to the input images '
+                        'before refinement starts. This mask should be sufficiently large '
+                        'to include the largest dimension of the particle. When a global '
+                        'search is performed, the radius should be set to include the expected '
+                        'area containing the particle. This area is usually larger than '
+                        'the area defined by the largest dimension of the particle because '
+                        'particles may not be precisely centered.')
         form.addParam('refine_innerMaskRadius', FloatParam, label='Inner mask radius (Å)',
-                        default=0.0, validators=[GE(0)], expertLevel=LEVEL_ADVANCED)
+                        default=0.0, validators=[GE(0)], expertLevel=LEVEL_ADVANCED,
+                        help='The radius of the circular mask applied to the input images '
+                        'before refinement starts. This mask should be sufficiently large '
+                        'to include the largest dimension of the particle. When a global '
+                        'search is performed, the radius should be set to include the expected '
+                        'area containing the particle. This area is usually larger than '
+                        'the area defined by the largest dimension of the particle because '
+                        'particles may not be precisely centered.')
         form.addParam('refine_signedCcResLimit', FloatParam, label='Signed CC resolution limit (Å)',
-                        default=0.0, expertLevel=LEVEL_ADVANCED)
+                        default=0.0, expertLevel=LEVEL_ADVANCED,
+                        help='Particle alignment is done by maximizing a correlation coefficient '
+                        'with the reference. The user has the option to maximize the unsigned '
+                        'correlation coefficient instead (starting at the limit set here) to '
+                        'reduce overfitting (Stewart and Grigorieff, 2004). Overfitting is also '
+                        'reduced by appropriate weighting of the data and this is usually '
+                        'sufficient to achieve good refinement results. The limit set here should '
+                        'therefore be set to 0.0 to maximize the signed correlation at all '
+                        'resolutions, unless there is evidence that there is overfitting. '
+                        '(This feature was formerly known as “FBOOST”.)')
         form.addParam('refine_usedPercentage', FloatParam, label='Percentage used (%)',
-                        default=100.0, validators=[Range(0, 100)], expertLevel=LEVEL_ADVANCED)
+                        default=100.0, validators=[Range(0, 100)], expertLevel=LEVEL_ADVANCED,
+                        help='Percentage of the input particles to be used. If not 100%, only a random '
+                        'subset of particles will be used')
         group = form.addGroup('Global search', expertLevel=LEVEL_ADVANCED,
                                 condition='refine_type == 1')
         group.addParam('refine_globalMaskRadius', FloatParam, label='Global mask radius (Å)',
                         default=120.0, validators=[GT(0)], expertLevel=LEVEL_ADVANCED)
         group.addParam('refine_numResults', IntParam, label='Number of results to refine',
-                        default=20, validators=[GT(0)], expertLevel=LEVEL_ADVANCED)
+                        default=20, validators=[GT(0)], expertLevel=LEVEL_ADVANCED,
+                        help='For a global search, an angular grid search is performed and '
+                        'the alignment parameters for the N best matching projections are '
+                        'then refined further in a local refinement. Only the set of '
+                        'parameters yielding the best score (correlation coefficient) is '
+                        'kept. Increasing N will increase the chances of finding the correct '
+                        'particle orientations but will slow down the search. A value '
+                        'of 20 is recommended.')
         group.addParam('refine_refineInputParameters', BooleanParam, label='Refine input parameters',
-                        default=True, expertLevel=LEVEL_ADVANCED)
+                        default=True, expertLevel=LEVEL_ADVANCED,
+                        help=' In addition to the N best sets of parameter values found during '
+                        'the grid search, the input set of parameters is also locally refined. '
+                        'Switching this off can help reduce over-fitting that may have biased '
+                        'the input parameters.')
         group.addParam('refine_angularStep', FloatParam, label='Angular search step (º)',
-                        default=35.26, validators=[GT(0)], expertLevel=LEVEL_ADVANCED)
+                        default=35.26, validators=[GT(0)], expertLevel=LEVEL_ADVANCED,
+                        help='he angular step used to generate the search grid for the global '
+                        'search. An appropriate value is suggested by default (depending on '
+                        'particle size and high-resolution limit) but smaller values can be '
+                        'tried if the user suspects that the search misses orientations found '
+                        'in the particle dataset. The smaller the value, the finer the search '
+                        'grid and the slower the search.')
         group.addParam('refine_xRange', FloatParam, label='Search range in X (Å)',
-                        default=22.5, validators=[GE(0)], expertLevel=LEVEL_ADVANCED)
+                        default=22.5, validators=[GE(0)], expertLevel=LEVEL_ADVANCED,
+                        help='The global search can be limited in the X and Y directions '
+                        '(measured from the box center) to ensure that only particles close '
+                        'to the box center are found. This is useful when the particle density '
+                        'is high and particles end up close to each other. In this case, it is '
+                        'usually still possible to align all particles in a cluster of particles '
+                        '(assuming they do not significantly overlap). The values provided here '
+                        'for the search range should be set to exclude the possibility that the '
+                        'same particle is selected twice and counted as two different particles.')
         group.addParam('refine_yRange', FloatParam, label='Search range in Y (Å)',
-                        default=22.5, validators=[GE(0)], expertLevel=LEVEL_ADVANCED)
+                        default=22.5, validators=[GE(0)], expertLevel=LEVEL_ADVANCED,
+                        help='The global search can be limited in the X and Y directions '
+                        '(measured from the box center) to ensure that only particles close '
+                        'to the box center are found. This is useful when the particle density '
+                        'is high and particles end up close to each other. In this case, it is '
+                        'usually still possible to align all particles in a cluster of particles '
+                        '(assuming they do not significantly overlap). The values provided here '
+                        'for the search range should be set to exclude the possibility that the '
+                        'same particle is selected twice and counted as two different particles.')
 
 
         form.addSection(label='Classification')
         form.addParam('classification_criteria', EnumParam, choices=['Occupancy', 'Score'], label='Criteria',
-                        default=0)
+                        default=1, 
+                        help='Criteria used for determining the particles belonging to a class. In '
+                        'our testing, using “Score” leads to better results.\n'
+                        '-Occupancy: Occupancy values are updated for each particle-class '
+                        'combination according to the log(p) value of the particle and '
+                        ' the average occupancy of the class. Then a particle is considered '
+                        ' to belong to the class where it obtains the highest occupancy\n'
+                        '-Score: The class with the highest score parameter is selected '
+                        'for each particle')
         form.addParam('classification_resLimit', FloatParam, label='Resolution Limit (Å)',
                         help='Resolution limit for classification. Use 0.0 for maximum',
-                        default=30.0, validators=[GE(0)])
+                        default=30.0, validators=[GE(0)],
+                        help='The limit set here is analogous to the high-resolution limit '
+                        'set for refinement. It cannot exceed the refinement limit. Setting '
+                        'it to a lower resolution may increase the useful SNR for '
+                        'classification and lead to better separation of particles with '
+                        'different structural features. However, at lower resolution the '
+                        'classification may also become less sensitive to heterogeneity '
+                        'represented by smaller structural features.')
         form.addParam('classification_enableFocus', BooleanParam, label='Enable focused classification',
-                        default=False, expertLevel=LEVEL_ADVANCED)
+                        default=False, expertLevel=LEVEL_ADVANCED,
+                        help='Classification can be performed based on structural variability '
+                        'in a defined region of the particle. This is useful when there are '
+                        'multiple regions that have uncorrelated structural variability. '
+                        'Using focused classification, each of these regions can be classified '
+                        'in turn. The focus feature can also be used to reduce noise from other '
+                        'parts of the images and increase the useful SNR for classification. '
+                        'The focus region is defined by a sphere with coordinates and radius '
+                        'in the following four inputs. (This feature was formerly known as '
+                        '“focus_mask”.)')
         group = form.addGroup('Focus sphere', 
                                 condition='classification_enableFocus is True',
                                 help='Sphere on which the classification will be focussed', 
                                 expertLevel=LEVEL_ADVANCED)
         group.addParam('classification_sphereX', FloatParam, label='Center X (Å)',
-                        default=0, expertLevel=LEVEL_ADVANCED)
+                        default=0, expertLevel=LEVEL_ADVANCED,
+                        help='Spherical region inside the particle that contains '
+                        'the structural variability to focus on')
         group.addParam('classification_sphereY', FloatParam, label='Center Y (Å)',
-                        default=0, expertLevel=LEVEL_ADVANCED)
+                        default=0, expertLevel=LEVEL_ADVANCED,
+                        help='Spherical region inside the particle that contains '
+                        'the structural variability to focus on')
         group.addParam('classification_sphereZ', FloatParam, label='Center Z (Å)',
-                        default=0, expertLevel=LEVEL_ADVANCED)
+                        default=0, expertLevel=LEVEL_ADVANCED,
+                        help='Spherical region inside the particle that contains '
+                        'the structural variability to focus on')
         group.addParam('classification_sphereRadius', FloatParam, label='Radius (Å)',
-                        default=10.0, validators=[GT(0)], expertLevel=LEVEL_ADVANCED)
+                        default=10.0, validators=[GT(0)], expertLevel=LEVEL_ADVANCED,
+                        help='Spherical region inside the particle that contains '
+                        'the structural variability to focus on')
 
 
         form.addSection(label='CTF refinement')
         form.addParam('ctf_enable', BooleanParam, label='Refine CTF',
-                        default=False, expertLevel=LEVEL_ADVANCED)
+                        default=False, expertLevel=LEVEL_ADVANCED,
+                        help=' Should the CTF be refined as well? This is only '
+                        'recommended for high-resolution data that yield '
+                        'reconstructions of better than 4 Å resolution, and for '
+                        'particles of sufficient molecular mass (500 kDa and higher).')
         form.addParam('ctf_range', FloatParam, label='Defocus search range (Å)',
                         condition='ctf_enable is True',
-                        default=500.0, validators=[GE(0)], expertLevel=LEVEL_ADVANCED)
+                        default=500.0, validators=[GE(0)], expertLevel=LEVEL_ADVANCED,
+                        help='The range of defocus values to search over for each '
+                        'particle. A search with the step size given in the next input '
+                        'will be performed starting at the defocus values determined in '
+                        'the previous refinement cycle minus the search range, up to '
+                        'values plus the search range. The search steps will be applied '
+                        'to both defocus values, keeping the estimated astigmatism constant.')
         form.addParam('ctf_step', FloatParam, label='Defocus search step (Å)',
                         condition='ctf_enable is True',
-                        default=50.0, validators=[GT(0)], expertLevel=LEVEL_ADVANCED)
+                        default=50.0, validators=[GT(0)], expertLevel=LEVEL_ADVANCED,
+                        help='The search step for the defocus search.')
 
 
         form.addSection(label='Reconstruction')
         form.addParam('reconstruction_score2weight', FloatParam, label='Score to weight constant (Å²)',
-                        default=2.0, validators=[GT(0)], expertLevel=LEVEL_ADVANCED)
+                        default=2.0, validators=[GT(0)], expertLevel=LEVEL_ADVANCED,
+                        help='The particles inserted into a reconstruction will be '
+                        'weighted according to their scores. The weighting function '
+                        'is akin to a B-factor, attenuating high-resolution signal '
+                        'of particles with lower scores more strongly than of particles '
+                        'with higher scores. The B-factor applied to each particle '
+                        'prior to insertion into the reconstruction is calculated '
+                        'as B = (score - average score) * constant * 0.25. Users '
+                        'are encouraged to calculate reconstructions with different '
+                        'values to find a value that produces the highest resolution. '
+                        'Values between 0 and 10 are reasonable (0 will disable weighting).')
         form.addParam('reconstruction_adjustScore4Defocus', BooleanParam, label='Adjust score for defocus',
-                        default=True, expertLevel=LEVEL_ADVANCED)
+                        default=True, expertLevel=LEVEL_ADVANCED,
+                        help='Scores sometimes depend on the amount of image defocus. '
+                        'A larger defocus amplifies low-resolution features in the '
+                        'image and this may lead to higher particle scores compared '
+                        'to particles from an image with a small defocus. Adjusting '
+                        'the scores for this difference makes sure that particles '
+                        'with smaller defocus are not systematically downweighted '
+                        'by the above B-factor weighting.')
         form.addParam('reconstruction_scoreThreshold', FloatParam, label='Score threshold',
                         default=0.0, validators=[GE(0)], expertLevel=LEVEL_ADVANCED,
-                        help='0 for disabling threshold. (0.0-1.0) for percentile. Otherwise the value as is will be used as a filter')
+                        help='Particles with a score lower than the threshold will be '
+                        'excluded from the reconstruction. This provides a way to '
+                        'exclude particles that may score low because of misalignment '
+                        'or damage. A value = 0 will select all particles; 0 < value <= 1 '
+                        'will be interpreted as a percentage; value > 1 will be '
+                        'interpreted as a fixed score threshold.')
         form.addParam('reconstruction_resLimit', FloatParam, label='Resolution limit (Å²)',
-                        default=0.0, validators=[GE(0)], expertLevel=LEVEL_ADVANCED)
+                        default=0.0, validators=[GE(0)], expertLevel=LEVEL_ADVANCED,
+                        help='The reconstruction calculation can be accelerated by '
+                        'limiting its resolution. It is important to make sure that '
+                        'the resolution limit entered here is higher than the '
+                        'resolution used for refinement in the following cycle.')
         form.addParam('reconstruction_enableAutoCrop', BooleanParam, label='Enable auto cropping images',
-                        default=False, expertLevel=LEVEL_ADVANCED)
+                        default=False, expertLevel=LEVEL_ADVANCED,
+                        help='The reconstruction calculation can also be accelerated '
+                        'by cropping the boxes containing the particles. Cropping '
+                        'will slightly reduce the overall quality of the reconstruction '
+                        'due to increased aliasing effects and should not be used when '
+                        'finalizing refinement. However, during refinement, cropping '
+                        'can greatly increase the speed of reconstruction without '
+                        'noticeable impact on the refinement results.')
         form.addParam('reconstruction_enableLikelihoodBlurring', BooleanParam, label='Enable likelihood blurring',
                         default=False, expertLevel=LEVEL_ADVANCED)
         form.addParam('reconstruction_smoothingFactor', FloatParam, label='Smoothing factor',
                         condition='reconstruction_enableLikelihoodBlurring is True',
-                        default=10.0, validators=[GT(0)], expertLevel=LEVEL_ADVANCED)
+                        default=1.0, validators=[GT(0)], expertLevel=LEVEL_ADVANCED)
 
 
         form.addSection(label='Masking')
@@ -351,7 +521,12 @@ class CistemProt3DClassification(ProtClassify3D):
 
     # --------------------------- INFO functions ------------------------------
     def _validate(self):
-        pass
+        result = []
+
+        if self.classification_resLimit.get() > self.refine_highResLimit.get():
+            result.append('Classification resolution limit can not exceed refinement high resolution limit')
+
+        return result
 
     def _summary(self):
         pass
