@@ -544,8 +544,8 @@ class CistemProt3DClassification(ProtClassify3D):
         else:
             if self.input_particles.get() is None:
                 result.append('Input particles must be specified when reference refinement is not')
-            if self.input_initialVolumes.get() is None:
-                result.append('Input initial volume must be specified when reference refinement is not')
+            if len(self.input_initialVolumes) == 0:
+                result.append('Input initial volumes must be specified when reference refinement is not')
 
         return result
 
