@@ -22,11 +22,10 @@
 # *
 # **************************************************************************
 
-from random import choices
 from pwem.constants import ALIGN_PROJ
 from pwem.emlib.image.image_handler import ImageHandler
 from pyworkflow.protocol.constants import LEVEL_ADVANCED, STEPS_PARALLEL
-from pyworkflow.protocol.params import EnumParam, MultiPointerParam, PointerParam, FloatParam, IntParam, BooleanParam, StringParam
+from pyworkflow.protocol.params import EnumParam, MultiPointerParam, PointerParam, FloatParam, IntParam, BooleanParam, StringParam, ProtocolClassParam
 from pyworkflow.protocol.params import LT, LE, GE, GT, Range
 from pyworkflow.constants import BETA
 from pyworkflow.utils.path import copyFile, makePath, createLink, cleanPattern, moveFile
@@ -58,10 +57,11 @@ class CistemProt3DClassification(ProtClassify3D):
         seedFmt='%(seed)s'
 
         myDict = {
-            'input_particles': f'input_particles.mrcs',
-            'input_parameters': f'input_parameters.par',
-            'input_volume': f'input_volume_{classFmt}.mrc',
-            'refine3d_input_parameters': f'Refine3D/Parameters/input_parameters_{iterFmt}_{classFmt}_{jobFmt}.par',
+            'input_particles': f'Inputs/input_particles.mrcs',
+            'input_parameters': f'Inputs/input_parameters_{classFmt}.par',
+            'input_volume': f'Inputs/input_volume_{classFmt}.mrc',
+            'input_statistics': f'Inputs/input_statistics_{classFmt}.txt',
+            'refine3d_input_parameters': f'Refine3D/Parameters/input_parameters_{iterFmt}_{classFmt}.par',
             'refine3d_input_reconstruction': f'Refine3D/Reconstructions/input_reconstruction_{iterFmt}_{classFmt}.mrc',
             'refine3d_input_statistics': f'Refine3D/Statistics/input_statistics_{iterFmt}_{classFmt}.txt',
             'refine3d_output_matching_projections': f'Refine3D/Projections/output_matching_projections_{iterFmt}_{classFmt}_{jobFmt}.mrc',
@@ -79,16 +79,25 @@ class CistemProt3DClassification(ProtClassify3D):
             'merge3d_output_statistics': f'Merge3D/Statistics/output_resolution_statistics_{iterFmt}_{classFmt}.txt',
             'output_volume': f'Reconstructions/output_volume_{iterFmt}_{classFmt}.mrc',
             'output_statistics': f'Statistics/output_statistics_{iterFmt}_{classFmt}.txt',
-            'output_classification': f'Classifications/output_classification_{iterFmt}.txt'
+            'output_classification': f'Classifications/output_classification_{iterFmt}.par',
+            'output_refinement': f'Refinements/output_refinement_{iterFmt}_{classFmt}.par' 
         }
         self._updateFilenamesDict(myDict)
     # --------------------------- DEFINE param functions ----------------------
     def _defineParams(self, form):
-        # TODO add help
         form.addSection(label='Input')
+        form.addParam('input_referenceRefinement', PointerParam, pointerClass='CistemProt3DClassification', label='Reference refinement',
+                        allowsNull=True,
+                        help='Local refinement requires a previous refinement as a reference for angular assignment. This field is '
+                        'used to specify that previous refinement. When this field is not specified and local refinement is used, '
+                        'the angular assignment contained by the particles themselves will be used for all classes')
         form.addParam('input_particles', PointerParam, pointerClass='SetOfParticles', label='Input particles',
+                        allowsNull=True,
+                        condition='input_referenceRefinement is None',
                         help='Particles to be classified')
         form.addParam('input_initialVolumes', MultiPointerParam, pointerClass='Volume', label='Initial volumes',
+                        allowsNull=True,
+                        condition='input_referenceRefinement is None',
                         help='Initial volumes that serve as a reference for the classification. '
                         'Classification will output a disctinct class for each of these volumes')
         form.addParam('input_molecularMass', FloatParam, label='Molecular mass (kDa)',
@@ -389,9 +398,9 @@ class CistemProt3DClassification(ProtClassify3D):
     # --------------------------- INSERT steps functions ----------------------
     def _insertAllSteps(self):
         # Shorthands for variables
-        nCycles = self.cycleCount.get()
-        nClasses = len(self.input_initialVolumes)
-        nParticles = len(self.input_particles.get())
+        nCycles = self._getCycleCount()
+        nClasses = self._getClassCount()
+        nParticles = self._getParticleCount()
         nWorkers = max(max(int(self.numberOfMpi), int(self.numberOfThreads))-1, 1)
         self.workDistribution = distribute_work(nParticles, nWorkers)
         nBlocks = len(self.workDistribution)
@@ -415,7 +424,8 @@ class CistemProt3DClassification(ProtClassify3D):
         self._createWorkingDir()
         self._createInputParticleStack()
         self._createInputParameters(nClasses)
-        self._createInputInitialVolumes()
+        self._createInputInitialVolumes(nClasses)
+        self._createInputStatistics(nClasses)
     
     def refineStep(self, iter, cls, job):
         # Shorthands for variables
@@ -427,8 +437,11 @@ class CistemProt3DClassification(ProtClassify3D):
         self.runJob(refine3d, args, cwd=self._getTmpPath(), env=Plugin.getEnviron())
 
     def classifyStep(self, nClasses, nJobs, iter):
+        # Merge refinements
+        self._mergeRefinementParameters(nClasses, nJobs, iter)
+
         # Read the refinement data performed by the previous step(s)
-        refinement = self._readRefinementParameters(nClasses, nJobs, iter)
+        refinement = self._readRefinementParameters(nClasses, iter)
 
         # Perform the classification according to the selected criteria
         criteria = 'score' if self.classification_criteria.get() == 1 else 'occupancy'
@@ -494,28 +507,28 @@ class CistemProt3DClassification(ProtClassify3D):
         )
 
     def createOutputStep(self, nCycles, nClasses, nBlocks):
-        particles = self.input_particles.get()
-        
+        particles = self._getInputParticles()
+
         # Create a SetOfClasses3D
         classes = self._createSetOfClasses3D(particles)
         self._fillClassesFromIter(classes, nClasses, nBlocks, nCycles-1)
-        
         self._defineOutputs(outputClasses=classes)
-        self._defineSourceRelation(self.input_particles, classes)
-        self._defineSourceRelation(self.input_initialVolumes, classes)
 
         # Create a SetOfVolumes and define its relations
         volumes = self._createSetOfVolumes()
         volumes.setSamplingRate(particles.getSamplingRate())
-        
         for cls in classes:
             vol = cls.getRepresentative()
             vol.setObjId(cls.getObjId())
             volumes.append(vol)
-        
         self._defineOutputs(outputVolumes=volumes)
-        self._defineSourceRelation(self.input_particles, volumes)
-        self._defineSourceRelation(self.input_initialVolumes, volumes)
+
+        # Define source relations
+        sources = self._getSourceParameters()
+        for source in sources:
+            self._defineSourceRelation(source, classes)
+            self._defineSourceRelation(source, volumes)
+
 
     # --------------------------- INFO functions ------------------------------
     def _validate(self):
@@ -523,6 +536,16 @@ class CistemProt3DClassification(ProtClassify3D):
 
         if self.classification_resLimit.get() < self.refine_highResLimit.get():
             result.append('Classification resolution limit can not exceed refinement high resolution limit')
+
+        refRefinement = self._getReferenceRefinement()
+        if refRefinement is not None:
+            if not refRefinement.isFinished():
+                result.append('Reference refinement must have finished')
+        else:
+            if self.input_particles.get() is None:
+                result.append('Input particles must be specified when reference refinement is not')
+            if self.input_initialVolume.get() is None:
+                result.append('Input initial volume must be specified when reference refinement is not')
 
         return result
 
@@ -533,6 +556,40 @@ class CistemProt3DClassification(ProtClassify3D):
         pass
 
     # --------------------------- UTILS functions -----------------------------
+
+    def _getReferenceRefinement(self):
+        return self.input_referenceRefinement.get()
+
+    def _getInputParticlesParam(self):
+        refRefinement = self._getReferenceRefinement()
+        return self.input_particles if refRefinement is None else refRefinement._getInputParticlesParam()
+
+    def _getInputParticles(self):
+        return self._getInputParticlesParam().get()
+
+    def _getSourceParameters(self):
+        result = []
+
+        refRefinement = self._getReferenceRefinement()
+        if refRefinement is not None:
+            result = [self.input_referenceRefinement]
+        else:
+            result = [self.input_particles, self.input_initialVolumes]
+
+        return result
+
+    def _getCycleCount(self):
+        return self.cycleCount.get()
+
+    def _getLastIter(self):
+        return self._getCycleCount() - 1
+
+    def _getParticleCount(self):
+        return len(self._getInputParticles())
+
+    def _getClassCount(self):
+        refRefinement = self._getReferenceRefinement()
+        return len(self.input_initialVolumes) if refRefinement is None else refRefinement._getClassCount()
 
     def _insertMonoBlockSteps(self, nCycles, nClasses):
         # Perform refine, reconstruct and merge steps repeatedly
@@ -593,6 +650,7 @@ class CistemProt3DClassification(ProtClassify3D):
 
     def _createWorkingDir(self):
         tmpDirectories = [
+            'Inputs',
             'Refine3D/Parameters',
             'Refine3D/Reconstructions',
             'Refine3D/Statistics',
@@ -608,9 +666,11 @@ class CistemProt3DClassification(ProtClassify3D):
         ]
 
         extraDirectories = [
+            'Inputs',
             'Reconstructions',
             'Statistics',
-            'Classifications'
+            'Classifications',
+            'Refinements'
         ]
         
         for d in tmpDirectories:
@@ -620,44 +680,105 @@ class CistemProt3DClassification(ProtClassify3D):
             makePath(self._getExtraPath(d))
 
     def _createInputParticleStack(self):
-        particles = self.input_particles.get()
-        path = self._getTmpPath(self._getFileName('input_particles'))
-        particles.writeStack(path)
+        refRefinement = self._getReferenceRefinement()
+        if refRefinement is not None:
+            # Create a link to the reference refinement's particles
+            createLink(
+                refRefinement._getExtraPath(refRefinement._getFileName('input_particles')),
+                self._getExtraPath(self._getFileName('input_particles'))
+            )
+
+        else:
+            # Create a stack of particles from the input particles
+            particles = self._getInputParticles()
+            path = self._getExtraPath(self._getFileName('input_particles'))
+            particles.writeStack(path)
+
+        # Create a link for the input particles in tmp (required by programs)
+        createLink(
+            self._getExtraPath(self._getFileName('input_particles')),
+            self._getTmpPath(self._getFileName('input_particles'))
+        )
 
     def _createInputParameters(self, nClasses):
-        particles = self.input_particles.get()
-        path = self._getTmpPath(self._getFileName('input_parameters'))
+        refRefinement = self._getReferenceRefinement()
+        if refRefinement is not None:
+            # Link last refinement parameters from the reference refinement
+            for cls in range(nClasses):
+                createLink(
+                    refRefinement._getExtraPath(refRefinement._getFileName('output_refinement', iter=refRefinement._getLastIter(), cls=cls)),
+                    self._getExtraPath(self._getFileName('input_parameters', cls=cls))
+                )
 
-        with FullFrealignParFile(path, 'w') as f:
-            f.writeHeader()
-            for i, particle in enumerate(particles):
-                f.writeParticle(particle, id=i+1, occupancy=100.0/nClasses) # Use its 1-based index as the mic_id
+        else:
+            # Create a single parameter file from input particles and replicate it for the rest of the classes
+            path = self._getExtraPath(self._getFileName('input_parameters', cls=0))
+            particles = self._getInputParticles()
 
-    def _createInputInitialVolumes(self):
-        initialVolumes = self.input_initialVolumes
+            with FullFrealignParFile(path, 'w') as f:
+                f.writeHeader()
+                for i, particle in enumerate(particles):
+                    f.writeParticle(particle, id=i+1, occupancy=100.0/nClasses) # Use its 1-based index as the mic_id
+        
+            for cls in range(1, nClasses):
+                createLink(
+                    self._getExtraPath(self._getFileName('input_parameters', cls=0)),
+                    self._getExtraPath(self._getFileName('input_parameters', cls=cls))
+                )
 
-        ih = ImageHandler()
-        for i, vol in enumerate(initialVolumes):
-            path = self._getTmpPath(self._getFileName('input_volume', cls=i))
-            ih.convert(vol.get(), path)
+    def _createInputInitialVolumes(self, nClasses):
+        refRefinement = self._getReferenceRefinement()
+        if refRefinement is not None:
+            # Link last reconstruction output volume from the reference refinement
+            for cls in range(nClasses):
+                createLink(
+                    refRefinement._getExtraPath(refRefinement._getFileName('output_volume', iter=refRefinement._getLastIter(), cls=cls)),
+                    self._getExtraPath(self._getFileName('input_volume', cls=cls))
+                )
+        else:
+            # Write the input parameters
+            ih = ImageHandler()
+            for i in range(nClasses):
+                path = self._getExtraPath(self._getFileName('input_volume', cls=i))
+                ih.convert(self.input_initialVolumes[i].get(), path)
 
+    def _createInputStatistics(self, nClasses):
+        refRefinement = self._getReferenceRefinement()
+        if refRefinement is not None:
+            # Link last reconstruction statistics from the reference refinement
+            for cls in range(nClasses):
+                createLink(
+                    refRefinement._getExtraPath(refRefinement._getFileName('output_statistics', iter=refRefinement._getLastIter(), cls=cls)),
+                    self._getExtraPath(self._getFileName('input_statistics', cls=cls))
+                )
+        else:
+            # Link to /dev/null. TODO maybe recover info from metadata
+            for cls in range(nClasses):
+                createLink(
+                    '/dev/null',
+                    self._getExtraPath(self._getFileName('input_statistics', cls=cls))
+                )
 
     def _prepareRefine(self, iter, cls, job):
         if iter == 0:
             # For the first step use the input volume as the input reconstruction
             createLink(
-                self._getTmpPath(self._getFileName('input_parameters')),
-                self._getTmpPath(self._getFileName('refine3d_input_parameters', iter=iter, cls=cls, job=job))
+                self._getExtraPath(self._getFileName('input_parameters', cls=cls)),
+                self._getTmpPath(self._getFileName('refine3d_input_parameters', iter=iter, cls=cls))
             )
             createLink(
-                self._getTmpPath(self._getFileName('input_volume', cls=cls)),
+                self._getExtraPath(self._getFileName('input_volume', cls=cls)),
                 self._getTmpPath(self._getFileName('refine3d_input_reconstruction', iter=iter, cls=cls))
+            )
+            createLink(
+                self._getExtraPath(self._getFileName('input_statistics', cls=cls)),
+                self._getTmpPath(self._getFileName('refine3d_input_statistics', iter=iter, cls=cls))
             )
         else:
             # Use the statistics, parameters and volume from the previous reconstruction
             createLink(
-                self._getTmpPath(self._getFileName('refine3d_output_parameters', iter=iter-1, cls=cls, job=job)),
-                self._getTmpPath(self._getFileName('refine3d_input_parameters', iter=iter, cls=cls, job=job))
+                self._getExtraPath(self._getFileName('output_refinement', iter=iter-1, cls=cls)),
+                self._getTmpPath(self._getFileName('refine3d_input_parameters', iter=iter, cls=cls))
             )
             createLink(
                 self._getExtraPath(self._getFileName('output_volume', iter=iter-1, cls=cls)),
@@ -726,16 +847,17 @@ eof
 """
 
     def _getRefineArgDictionary(self, iter, cls, job):
-        inputParticles = self.input_particles.get()
+        inputParticles = self._getInputParticles()
         acquisition = inputParticles.getAcquisition()
         block = self.workDistribution[job]
+        useStatistics = (self._getReferenceRefinement() is not None) or (iter > 0)
 
         return {
             'input_particle_images': self._getFileName('input_particles'),
-            'input_parameter_file': self._getFileName('refine3d_input_parameters', iter=iter, cls=cls, job=job),
+            'input_parameter_file': self._getFileName('refine3d_input_parameters', iter=iter, cls=cls),
             'input_reconstruction': self._getFileName('refine3d_input_reconstruction', iter=iter, cls=cls),
             'input_reconstruction_statistics': self._getFileName('refine3d_input_statistics', iter=iter, cls=cls),
-            'use_statistics': boolToYN(iter > 0), # Do not use statistics at the first iteration (they do not exist)
+            'use_statistics': boolToYN(useStatistics),
             'output_matching_projections': self._getFileName('refine3d_output_matching_projections', iter=iter, cls=cls, job=job),
             'output_parameter_file': self._getFileName('refine3d_output_parameters', iter=iter, cls=cls, job=job),
             'output_shift_file': self._getFileName('refine3d_output_shifts', iter=iter, cls=cls, job=job),
@@ -784,18 +906,26 @@ eof
             'threshold_input_3d': boolToYN(True),
         }
 
-    def _readRefinementParameters(self, nClasses, nJobs, iter):
-        result = [[] for _ in range(nClasses)]
+    def _mergeRefinementParameters(self, nClasses, nJobs, iter):
+        for cls in range(nClasses):
+            outputPath = self._getExtraPath(self._getFileName('output_refinement', iter=iter, cls=cls))
+            with FullFrealignParFile(outputPath, 'w') as output:
+                output.writeHeader()
+
+                for job in range(nJobs):
+                    inputPath = self._getTmpPath(self._getFileName('refine3d_output_parameters', iter=iter, cls=cls, job=job))
+                    with FullFrealignParFile(inputPath, 'r') as input:
+                        for row in input:
+                            output.writeRow(row)
+
+    def _readRefinementParameters(self, nClasses, iter):
+        result = [None] * nClasses
 
         # Read all the putput parameters
         for cls in range(nClasses):
-            for job in range(nJobs):
-                path = self._getTmpPath(self._getFileName('refine3d_output_parameters', iter=iter, cls=cls, job=job))
-
-                # Read an entire file
-                with FullFrealignParFile(path, 'r') as f:
-                    for row in f:
-                        result[cls].append(row)
+            path = self._getExtraPath(self._getFileName('output_refinement', iter=iter, cls=cls))
+            with FullFrealignParFile(path, 'r') as f:
+                result[cls] = list(f)
 
         # Ensure that everything was read
         assert(len(result) == nClasses)
@@ -881,7 +1011,7 @@ eof
         if iter == 0:
             # For the first step use the input volume as the input reconstruction
             createLink(
-                self._getTmpPath(self._getFileName('input_volume', cls=cls)),
+                self._getExtraPath(self._getFileName('input_volume', cls=cls)),
                 self._getTmpPath(self._getFileName('reconstruct3d_input_reconstruction', iter=iter, cls=cls))
             )
         else:
@@ -938,7 +1068,7 @@ eof
 """
 
     def _getReconstructArgDictionary(self, iter, cls, job, all=False):
-        inputParticles = self.input_particles.get()
+        inputParticles = self._getInputParticles()
         acquisition = inputParticles.getAcquisition()
         block = self.workDistribution[job]
 
@@ -985,9 +1115,10 @@ eof
         parities = ['evn', 'odd']
         for parity in parities:
             for i in range(nJobs):
-                src = self._getTmpPath(self._getFileName('reconstruct3d_output_dump', iter=iter, cls=cls, job=i, par=parity))
-                dst = self._getTmpPath(self._getFileName('merge3d_input_dump', iter=iter, cls=cls, par=parity, seed=str(i+1)))
-                createLink(src, dst)
+                createLink(
+                    self._getTmpPath(self._getFileName('reconstruct3d_output_dump', iter=iter, cls=cls, job=i, par=parity)),
+                    self._getTmpPath(self._getFileName('merge3d_input_dump', iter=iter, cls=cls, par=parity, seed=str(i+1)))
+                )
 
     def _getMergeArgTemplate(self):
         return """ << eof
