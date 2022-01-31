@@ -125,7 +125,7 @@ class FullFrealignParFile(FrealignParFileBase):
         { 'name': 'defocus_angle',  'header': 'ANGAST  ',   'format': '{:<8.2f}',   'type': float},
         { 'name': 'p_shift',        'header': 'PSHIFT  ',   'format': '{:<8.2f}',   'type': float},
         { 'name': 'occupancy',      'header': 'OCC     ',   'format': '{:<8.2f}',   'type': float},
-        { 'name': 'log_p',          'header': 'LOGP    ',   'format': '{:<8.2f}',   'type': float},
+        { 'name': 'log_p',          'header': 'LOGP    ',   'format': '{:<8d}',     'type': int},
         { 'name': 'sigma',          'header': 'SIGMA   ',   'format': '{:<8.2f}',   'type': float},
         { 'name': 'score',          'header': 'SCORE   ',   'format': '{:<8.2f}',   'type': float},
         { 'name': 'change',         'header': 'CHANGE  ',   'format': '{:<8.2f}',   'type': float},
