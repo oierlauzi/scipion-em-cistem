@@ -752,10 +752,14 @@ class CistemProt3DClassification(ProtClassify3D):
                     self._getExtraPath(self._getFileName('input_statistics', cls=cls))
                 )
         else:
-            # Link to /dev/null. TODO maybe recover info from metadata
-            for cls in range(nClasses):
+            # Create an empty file as it wont be used and replicate it
+            with open(self._getExtraPath(self._getFileName('input_statistics', cls=0)), 'w') as f:
+                f.write("C NO STATISTICS")
+
+            # Link to /dev/null. TODO maybe recover info from 
+            for cls in range(1, nClasses):
                 createLink(
-                    '/dev/null',
+                    self._getExtraPath(self._getFileName('input_statistics', cls=0)),
                     self._getExtraPath(self._getFileName('input_statistics', cls=cls))
                 )
 
