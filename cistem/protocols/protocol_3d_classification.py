@@ -91,13 +91,16 @@ class CistemProt3DClassification(ProtClassify3D):
                         help='Local refinement requires a previous refinement as a reference for angular assignment. This field is '
                         'used to specify that previous refinement. When this field is not specified and local refinement is used, '
                         'the angular assignment contained by the particles themselves will be used for all classes')
+        form.addParam('input_referenceIteration', IntParam, label='Reference refinement iteration',
+                        default=-1, condition='input_referenceRefinement is not None',
+                        help='Iteration from the reference refinement used as a reference. 0 is first, 1 second and so on. '
+                        'Negative values can be used to reference backwards, -1 referring to the last one, -2 to penultimate '
+                        'and so on')
         form.addParam('input_particles', PointerParam, pointerClass='SetOfParticles', label='Input particles',
-                        allowsNull=True,
-                        condition='input_referenceRefinement is None',
+                        allowsNull=True, condition='input_referenceRefinement is None',
                         help='Particles to be classified')
         form.addParam('input_initialVolumes', MultiPointerParam, pointerClass='Volume', label='Initial volumes',
-                        allowsNull=True,
-                        condition='input_referenceRefinement is None',
+                        allowsNull=True, condition='input_referenceRefinement is None',
                         help='Initial volumes that serve as a reference for the classification. '
                         'Classification will output a disctinct class for each of these volumes')
         form.addParam('input_molecularMass', FloatParam, label='Molecular mass (kDa)',
@@ -581,8 +584,15 @@ class CistemProt3DClassification(ProtClassify3D):
     def _getCycleCount(self):
         return self.cycleCount.get()
 
+    def _getIter(self, i):
+        n = self._getCycleCount()
+        i %= n # Cycle in (-n, n)
+        i += n # Ensure that the number is positive
+        i %= n # Cycle in [0, n)
+        return i
+
     def _getLastIter(self):
-        return self._getCycleCount() - 1
+        return self._getIter(-1)
 
     def _getParticleCount(self):
         return len(self._getInputParticles())
@@ -706,7 +716,7 @@ class CistemProt3DClassification(ProtClassify3D):
             # Link last refinement parameters from the reference refinement
             for cls in range(nClasses):
                 createLink(
-                    refRefinement._getExtraPath(refRefinement._getFileName('output_refinement', iter=refRefinement._getLastIter(), cls=cls)),
+                    refRefinement._getExtraPath(refRefinement._getFileName('output_refinement', iter=refRefinement._getIter(self.input_referenceIteration.get()), cls=cls)),
                     self._getExtraPath(self._getFileName('input_parameters', cls=cls))
                 )
 
@@ -732,7 +742,7 @@ class CistemProt3DClassification(ProtClassify3D):
             # Link last reconstruction output volume from the reference refinement
             for cls in range(nClasses):
                 createLink(
-                    refRefinement._getExtraPath(refRefinement._getFileName('output_volume', iter=refRefinement._getLastIter(), cls=cls)),
+                    refRefinement._getExtraPath(refRefinement._getFileName('output_volume', iter=refRefinement._getIter(self.input_referenceIteration.get()), cls=cls)),
                     self._getExtraPath(self._getFileName('input_volume', cls=cls))
                 )
         else:
@@ -748,7 +758,7 @@ class CistemProt3DClassification(ProtClassify3D):
             # Link last reconstruction statistics from the reference refinement
             for cls in range(nClasses):
                 createLink(
-                    refRefinement._getExtraPath(refRefinement._getFileName('output_statistics', iter=refRefinement._getLastIter(), cls=cls)),
+                    refRefinement._getExtraPath(refRefinement._getFileName('output_statistics', iter=refRefinement._getIter(self.input_referenceIteration.get()), cls=cls)),
                     self._getExtraPath(self._getFileName('input_statistics', cls=cls))
                 )
         else:
