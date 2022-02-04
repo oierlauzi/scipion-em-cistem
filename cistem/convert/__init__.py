@@ -28,4 +28,3 @@ from .convert import *
 from .dataimport import *
 
 from .FrealignParFile import *
-from .ClassesLoader import * 

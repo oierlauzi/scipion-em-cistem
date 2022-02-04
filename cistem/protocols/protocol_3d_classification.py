@@ -31,11 +31,13 @@ from pyworkflow.constants import BETA
 from pyworkflow.utils.path import copyFile, makePath, createLink, cleanPattern, moveFile
 
 from pwem.protocols import ProtClassify3D
+from pwem.objects.data import CTFModel, Transform
 
 from cistem import Plugin
-from cistem.convert import FullFrealignParFile, ClassesLoader, boolToYN
+from cistem.convert import FullFrealignParFile, FrealignStatisticsFile, matrixFromGeometry, boolToYN
 
 import math
+import numpy as np
 
 class CistemProt3DClassification(ProtClassify3D):
     """ Classify particles into 3d classes """
@@ -405,7 +407,7 @@ class CistemProt3DClassification(ProtClassify3D):
         nClasses = self._getClassCount()
         nParticles = self._getParticleCount()
         nWorkers = max(max(int(self.numberOfMpi), int(self.numberOfThreads))-1, 1)
-        self.workDistribution = distribute_work(nParticles, nWorkers)
+        self.workDistribution = self._distributeWork(nParticles, nWorkers)
         nBlocks = len(self.workDistribution)
         
         # Initialize required files for the first iteration
@@ -600,6 +602,37 @@ class CistemProt3DClassification(ProtClassify3D):
     def _getClassCount(self):
         refRefinement = self._getReferenceRefinement()
         return len(self.input_initialVolumes) if refRefinement is None else refRefinement._getClassCount()
+
+    def _distributeWork(self, n, m):
+        """ Given n items, it distributes it into at most m similarly sized groups. It returns a list 
+        with the [first, last) elements of each group as the tuple (first, last)"""
+
+        # Obtain the quotient and the reminder of dividing n by m
+        q, r = divmod(n, m)
+
+        # Distribute the work as evenly as possible, groups of the same size
+        # as the quotient and the reminder spread across the first group. If 
+        # m>n, q=0, so avoid adding zeros at the end of the array
+        result = []
+        first = 0
+        for _ in range(r):
+            last = first + q + 1
+            result.append((first, last))
+            first = last
+
+        if q > 0:
+            for _ in range(m-r): # always r < m
+                last = first + q
+                result.append((first, last))
+                first = last
+
+
+        # Ensure that all the work has been distributed correctly
+        assert(result[0][0] == 0) # Start at 0
+        assert(result[-1][1] == n) # End at n
+        assert(len(result) <= m) # At most m groups
+
+        return result
 
     def _insertMonoBlockSteps(self, nCycles, nClasses):
         # Perform refine, reconstruct and merge steps repeatedly
@@ -1165,7 +1198,7 @@ eof
 
     def _fillClassesFromIter(self, clsSet, nClasses, nBlocks, iteration):
         """ Create the SetOfClasses3D from a given iteration. """
-        classLoader = ClassesLoader(
+        classLoader = CistemProt3DClassification.ClassesLoader(
             [self._getExtraPath(self._getFileName('output_volume', iter=iteration, cls=cls)) for cls in range(nClasses)],
             [self._getExtraPath(self._getFileName('output_statistics', iter=iteration, cls=cls)) for cls in range(nClasses)],
             self._getExtraPath(self._getFileName('output_classification', iter=iteration)),
@@ -1174,33 +1207,54 @@ eof
         classLoader.fillClasses(clsSet)
 
 
-def distribute_work(n, m):
-    """ Given n items, it distributes it into at most m similarly sized groups. It returns a list 
-    with the [first, last) elements of each group as the tuple (first, last)"""
+    class ClassesLoader:
+        """ Helper class to read classes information from parameter files produced
+        by Cistem classification runs.
+        """
+        def __init__(self, repPaths, statisticsPaths, particleDataPath, alignment):
+            self._classRepresentatives = repPaths
+            self._classStatistics = [FrealignStatisticsFile(p, 'r') for p in statisticsPaths]
+            self._particleData = FullFrealignParFile(particleDataPath, 'r')
+            self._alignment = alignment
 
-    # Obtain the quotient and the reminder of dividing n by m
-    q, r = divmod(n, m)
+        def fillClasses(self, clsSet):
+            clsSet.classifyItems(updateItemCallback=self._updateParticle,
+                                updateClassCallback=self._updateClass,
+                                itemDataIterator=iter(self._particleData),
+                                doClone=False)
 
-    # Distribute the work as evenly as possible, groups of the same size
-    # as the quotient and the reminder spread across the first group. If 
-    # m>n, q=0, so avoid adding zeros at the end of the array
-    result = []
-    first = 0
-    for _ in range(r):
-        last = first + q + 1
-        result.append((first, last))
-        first = last
+        def _updateParticle(self, item, row):
+            self._updateClassId(item, row)
+            self._updateCtf(item, row)
+            self._updateTransform(item, row)
 
-    if q > 0:
-        for _ in range(m-r): # always r < m
-            last = first + q
-            result.append((first, last))
-            first = last
+            #if getattr(self, '__updatingFirst', True):
+            #    self._reader.createExtraLabels(item, row, PARTICLE_EXTRA_LABELS)
+            #    self.__updatingFirst = False
+            #else:
+            #    self._reader.setExtraLabels(item, row)
 
+        def _updateClassId(self, item, row):
+            item.setClassId(row['film']+1)
 
-    # Ensure that all the work has been distributed correctly
-    assert(result[0][0] == 0) # Start at 0
-    assert(result[-1][1] == n) # End at n
-    assert(len(result) <= m) # At most m groups
+        def _updateCtf(self, item, row):
+            if not item.hasCTF():
+                item.setCTF(CTFModel())
+            ctf = item.getCTF()
+            ctf.setStandardDefocus(row['defocus_u'], row['defocus_v'], row['defocus_angle'])
 
-    return result
+        def _updateTransform(self, item, row):
+            matrix = matrixFromGeometry(
+                np.array([row['shift_x'], row['shift_y'], 0]),
+                np.array([row['psi'], row['theta'], row['phi']])
+            )
+
+            if not item.hasTransform():
+                item.setTransform(Transform())
+            transform = item.getTransform()
+            transform.setMatrix(matrix)
+
+        def _updateClass(self, item):
+            classId = item.getObjId()
+            item.setAlignment(self._alignment)
+            item.getRepresentative().setLocation(self._classRepresentatives[classId-1])
