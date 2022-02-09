@@ -85,6 +85,7 @@ class CistemProt3DClassification(ProtClassify3D):
             'output_refinement': f'Refinements/output_refinement_{iterFmt}_{classFmt}.par' 
         }
         self._updateFilenamesDict(myDict)
+
     # --------------------------- DEFINE param functions ----------------------
     def _defineParams(self, form):
         form.addSection(label='Input')
@@ -512,16 +513,13 @@ class CistemProt3DClassification(ProtClassify3D):
         )
 
     def createOutputStep(self, nCycles, nClasses, nBlocks):
-        particles = self._getInputParticles()
 
         # Create a SetOfClasses3D
-        classes = self._createSetOfClasses3D(particles)
-        self._fillClassesFromIter(classes, nClasses, nBlocks, nCycles-1)
-        self._defineOutputs(outputClasses=classes)
+        classes = self._createOutput3dClasses(nClasses, self._getLastIter())
 
         # Create a SetOfVolumes and define its relations
         volumes = self._createSetOfVolumes()
-        volumes.setSamplingRate(particles.getSamplingRate())
+        volumes.setSamplingRate(classes.getImages().getSamplingRate())
         for cls in classes:
             vol = cls.getRepresentative()
             vol.setObjId(cls.getObjId())
@@ -1196,7 +1194,7 @@ eof
             'number_of_dump_files': nJobs,
         }
 
-    def _fillClassesFromIter(self, clsSet, nClasses, nBlocks, iteration):
+    def _fillClasses(self, clsSet, nClasses, iteration):
         """ Create the SetOfClasses3D from a given iteration. """
         classLoader = CistemProt3DClassification.ClassesLoader(
             [self._getExtraPath(self._getFileName('output_volume', iter=iteration, cls=cls)) for cls in range(nClasses)],
@@ -1206,6 +1204,10 @@ eof
         )
         classLoader.fillClasses(clsSet)
 
+    def _createOutput3dClasses(self, nClasses, iter):
+        classes = self._createSetOfClasses3D(self._getInputParticles())
+        self._fillClasses(classes, nClasses, iter)
+        return classes
 
     class ClassesLoader:
         """ Helper class to read classes information from parameter files produced
