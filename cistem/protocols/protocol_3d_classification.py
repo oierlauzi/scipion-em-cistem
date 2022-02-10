@@ -516,14 +516,10 @@ class CistemProt3DClassification(ProtClassify3D):
 
         # Create a SetOfClasses3D
         classes = self._createOutput3dClasses(nClasses, self._getLastIter())
+        self._defineOutputs(outputClasses=classes)
 
         # Create a SetOfVolumes and define its relations
-        volumes = self._createSetOfVolumes()
-        volumes.setSamplingRate(classes.getImages().getSamplingRate())
-        for cls in classes:
-            vol = cls.getRepresentative()
-            vol.setObjId(cls.getObjId())
-            volumes.append(vol)
+        volumes = self._createOutputVolumes(classes)
         self._defineOutputs(outputVolumes=volumes)
 
         # Define source relations
@@ -1208,6 +1204,16 @@ eof
         classes = self._createSetOfClasses3D(self._getInputParticles())
         self._fillClasses(classes, nClasses, iter)
         return classes
+
+    def _createOutputVolumes(self, classes):
+        volumes = self._createSetOfVolumes()
+        volumes.setSamplingRate(classes.getImages().getSamplingRate())
+        for cls in classes:
+            vol = cls.getRepresentative()
+            vol.setObjId(cls.getObjId())
+            volumes.append(vol)
+        
+        return volumes
 
     class ClassesLoader:
         """ Helper class to read classes information from parameter files produced
