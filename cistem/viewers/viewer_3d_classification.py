@@ -22,9 +22,13 @@
 # *
 # **************************************************************************
 
+from cProfile import label
+from email.policy import default
+import re
+from unittest import result
 from pyworkflow.viewer import ProtocolViewer, DESKTOP_TKINTER, WEB_DJANGO
-from pyworkflow.protocol.params import IntParam, LabelParam
-from pwem.viewers import TableView, Classes3DView
+from pyworkflow.protocol.params import IntParam, LabelParam, BooleanParam
+from pwem.viewers import TableView, Classes3DView, EmPlotter
 
 from cistem.protocols.protocol_3d_classification import CistemProt3DClassification
 
@@ -49,10 +53,20 @@ class Cistem3DClassificationViewer(ProtocolViewer):
         form.addParam('displayClasses', LabelParam, label='Classification')
         form.addParam('displayScores', LabelParam, label='Scores')
 
+        form.addSection(label='Convergence')
+        form.addParam('considerReferences', BooleanParam, label='Consider previous refinement(s)',
+                        default=True,
+                        help='If a reference refinement is specified for this protocol, this option '
+                        'specifies if previous refinement chain is included in the plot')
+        form.addParam('displayRefinementScoreConvergence', LabelParam, label='Refinement score convergence')
+        form.addParam('displayClassificationScoreConvergence', LabelParam, label='Classification score convergence')
+
     def _getVisualizeDict(self):
         return {
             'displayClasses': self._displayClasses,
             'displayScores': self._displayScores,
+            'displayRefinementScoreConvergence': self._displayRefinementScoreConvergence,
+            'displayClassificationScoreConvergence': self._displayClassificationScoreConvergence
         }
     
     # --------------------------- DEFINE display functions ----------------------
@@ -68,7 +82,41 @@ class Cistem3DClassificationViewer(ProtocolViewer):
         scores = self._readRefinementColumn(nClasses, iter, 'score')
         return self._showClassificationTable(scores, classification, 'Classification')
 
-    
+    def _displayRefinementScoreConvergence(self, e):
+        scoreStatistics = self._readProtocolChainRefinementStatistics('score')
+        
+        plot = EmPlotter(y=self.protocol._getClassCount()) # A column for each class
+
+        for cls in range(self.protocol._getClassCount()):
+            maximums = [stat[cls]['max'] for stat in scoreStatistics]
+            minimums = [stat[cls]['min'] for stat in scoreStatistics]
+            averages = [stat[cls]['avg'] for stat in scoreStatistics]
+            iterations = list(range(len(averages)))
+
+            # Plot the results
+            plot.createSubPlot(f'Score convergence class {cls}', 'Iteration', 'Score')
+            plot.plotScatter(iterations, minimums, 'red')
+            plot.plotScatter(iterations, averages, 'green')
+            plot.plotScatter(iterations, maximums, 'blue')
+
+        return [plot]
+
+    def _displayClassificationScoreConvergence(self, e):
+        scoreStatistics = self._readProtocolChainClassificationStatistics('score')
+        maximums = [stat['max'] for stat in scoreStatistics]
+        minimums = [stat['min'] for stat in scoreStatistics]
+        averages = [stat['avg'] for stat in scoreStatistics]
+        iterations = list(range(len(averages)))
+
+        # Plot the results
+        plot = EmPlotter()
+        plot.createSubPlot('Score convergence', 'Iteration', 'Score')
+        plot.plotScatter(iterations, minimums, 'red')
+        plot.plotScatter(iterations, averages, 'green')
+        plot.plotScatter(iterations, maximums, 'blue')
+
+        return [plot]
+
     # --------------------------- UTILS functions -----------------------------
     def _getIteration(self):
         return self.protocol._getIter(self.iteration.get())
@@ -107,3 +155,51 @@ class Cistem3DClassificationViewer(ProtocolViewer):
 
         data = list(zip(*(scores + [classification])))
         return [TableView(header, data, None, title)]
+
+    def _getProtocolChain(self):
+        result = [self.protocol]
+
+        # Recursively obtain the reference refinements if requested
+        if self.considerReferences.get():
+            while result[-1]._getReferenceRefinement() is not None:
+                result.append(result[-1]._getReferenceRefinement())
+
+            # First refinement in the front:
+            result.reverse()
+
+        return result
+
+    def _readProtocolChainRefinementStatistics(self, col):
+        result = []
+
+        protocols = self._getProtocolChain()
+        for protocol in protocols:
+            for iter in range(protocol._getCycleCount()):
+                result.append([])
+                for cls in range(protocol._getClassCount()):
+                    path = protocol._getExtraPath(protocol._getFileName('output_refinement', iter=iter, cls=cls))
+                    with FullFrealignParFile(path, 'r') as f:
+                        result[-1].append({
+                            'max': f.getMax(col),
+                            'min': f.getMin(col),
+                            'avg': f.getAverage(col)
+                        })
+
+        return result
+
+    def _readProtocolChainClassificationStatistics(self, col):
+        result = []
+
+        protocols = self._getProtocolChain()
+        for protocol in protocols:
+            for iter in range(protocol._getCycleCount()):
+                path = protocol._getExtraPath(protocol._getFileName('output_classification', iter=iter))
+                with FullFrealignParFile(path, 'r') as f:
+                    result.append({
+                        'max': f.getMax(col),
+                        'min': f.getMin(col),
+                        'avg': f.getAverage(col)
+                    })
+
+        return result
+

@@ -30,6 +30,7 @@ class FrealignParFileBase(object):
     def __init__(self, path, mode, columns):
         self._file = open(path, mode)
         self._columns = columns
+        self._cache = None
 
     def __enter__(self):
         return self
@@ -38,13 +39,8 @@ class FrealignParFileBase(object):
         self.close()
 
     def __iter__(self):
-        """ Convert a line into a dict with _header as keys.
-        :return: yield a dict - single row
-        """
-        for line in self._file:
-            line = line.strip()
-            if not line.startswith(self.COMMENT_TOKEN): # Skip comments
-                yield self._parseLine(line)
+        self._populateCache()
+        return self._cache.__iter__()
 
     def writeRow(self, row):
         if isinstance(row, list):
@@ -58,6 +54,10 @@ class FrealignParFileBase(object):
             # Merge all the columns into a line
             line = self.COLUMN_SEPARATOR.join(row) + '\n'
             self._file.write(line)
+
+            # Keep cache consistent
+            if self._cache is not None:
+                self._cache.append(dict(zip(self._columns, row)))
 
         elif isinstance(row, dict):
             # Recursively call to itself to reach the case above
@@ -76,8 +76,41 @@ class FrealignParFileBase(object):
         comment = self.COLUMN_SEPARATOR.join(headers)
         self.writeComment(comment)
 
+    def getMax(self, col):
+        self._populateCache()
+        return self._accumulateColumn(col, max)
+
+    def getMin(self, col):
+        self._populateCache()
+        return self._accumulateColumn(col, min)
+
+    def getAverage(self, col):
+        self._populateCache()
+        result = self._accumulateColumn(col, sum)
+
+        # Divide by the number of elements
+        if result is not None:
+            result /= len(self._cache)
+
+        return result
+
     def close(self):
+        self._cache = None
         self._file.close()
+
+    def _populateCache(self):
+        if self._cache is None:
+            self._cache = self._readFile()
+
+    def _readFile(self):
+        result = []
+
+        for line in self._file:
+            line = line.strip()
+            if not line.startswith(self.COMMENT_TOKEN): # Skip comments
+                result.append(self._parseLine(line))
+
+        return result
 
     def _parseLine(self, line):
         # Obtain the key and tokens arrays
@@ -93,6 +126,20 @@ class FrealignParFileBase(object):
 
         # All ok, build a dictionary with the key-value pairs
         return dict(zip(keys, values))
+
+    def _accumulateColumn(self, col, func):
+        result = None
+
+        # Accumulate if not empty
+        if self._cache:
+            # Initialize with the first value
+            result = self._cache[0][col]
+
+            # Accumulate for the rest
+            for i in range(1, len(self._cache)):
+                result = func((result, self._cache[i][col]))
+
+        return result
 
 
 class MinimalFrealignParFile(FrealignParFileBase):
