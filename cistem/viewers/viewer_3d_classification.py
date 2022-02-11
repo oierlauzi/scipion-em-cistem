@@ -22,17 +22,17 @@
 # *
 # **************************************************************************
 
-from cProfile import label
-from email.policy import default
-import re
-from unittest import result
 from pyworkflow.viewer import ProtocolViewer, DESKTOP_TKINTER, WEB_DJANGO
 from pyworkflow.protocol.params import IntParam, LabelParam, BooleanParam
+from pyworkflow.gui.plotter import getHexColorList
 from pwem.viewers import TableView, Classes3DView, EmPlotter
 
 from cistem.protocols.protocol_3d_classification import CistemProt3DClassification
 
 from cistem.convert.FrealignParFile import FullFrealignParFile
+
+import numpy as np
+import matplotlib.pyplot as plt
 
 class Cistem3DClassificationViewer(ProtocolViewer):
     _label = 'viewer classification 3d'
@@ -52,21 +52,27 @@ class Cistem3DClassificationViewer(ProtocolViewer):
                         'represents the last one, -2 the penultimate and so on')
         form.addParam('displayClasses', LabelParam, label='Classification')
         form.addParam('displayScores', LabelParam, label='Scores')
+        form.addParam('displayScoreImage', LabelParam, label='Score Image')
 
         form.addSection(label='Convergence')
         form.addParam('considerReferences', BooleanParam, label='Consider previous refinement(s)',
                         default=True,
                         help='If a reference refinement is specified for this protocol, this option '
                         'specifies if previous refinement chain is included in the plot')
-        form.addParam('displayRefinementScoreConvergence', LabelParam, label='Refinement score convergence')
-        form.addParam('displayClassificationScoreConvergence', LabelParam, label='Classification score convergence')
+        form.addParam('displayRefinementScores', LabelParam, label='Refinement scores')
+        form.addParam('displayClassificationScores', LabelParam, label='Classification scores')
+        form.addParam('displayClassSizeDistribution', LabelParam, label='Class size distribution')
+        form.addParam('displayClassDistributionImage', LabelParam, label='Class distribution image')
 
     def _getVisualizeDict(self):
         return {
             'displayClasses': self._displayClasses,
             'displayScores': self._displayScores,
-            'displayRefinementScoreConvergence': self._displayRefinementScoreConvergence,
-            'displayClassificationScoreConvergence': self._displayClassificationScoreConvergence
+            'displayScoreImage': self._displayScoreImage,
+            'displayRefinementScores': self._displayRefinementScores,
+            'displayClassificationScores': self._displayClassificationScores,
+            'displayClassSizeDistribution': self._displayClassSizeDistribution,
+            'displayClassDistributionImage': self._displayClassDistributionImage
         }
     
     # --------------------------- DEFINE display functions ----------------------
@@ -81,8 +87,22 @@ class Cistem3DClassificationViewer(ProtocolViewer):
         classification = self._readClassification(iter)
         scores = self._readRefinementColumn(nClasses, iter, 'score')
         return self._showClassificationTable(scores, classification, 'Classification')
+    
+    def _displayScoreImage(self, e):
+        iter = self._getIteration()
+        nClasses = self.protocol._getClassCount()
+        scores = self._readRefinementColumn(nClasses, iter, 'score')
 
-    def _displayRefinementScoreConvergence(self, e):
+        # Plot scores as an image
+        fig, ax = plt.subplots()
+        plt.colorbar(ax.imshow(np.array(scores).T, origin='lower', aspect='auto', interpolation='none'))
+        ax.set_xlabel('Class number')
+        ax.set_ylabel('Particle index')
+        ax.set_title('Score')
+
+        return [fig]
+
+    def _displayRefinementScores(self, e):
         scoreStatistics = self._readProtocolChainRefinementStatistics('score')
         
         plot = EmPlotter(y=self.protocol._getClassCount()) # A column for each class
@@ -95,27 +115,66 @@ class Cistem3DClassificationViewer(ProtocolViewer):
 
             # Plot the results
             plot.createSubPlot(f'Score convergence class {cls}', 'Iteration', 'Score')
-            plot.plotScatter(iterations, minimums, 'red')
-            plot.plotScatter(iterations, averages, 'green')
-            plot.plotScatter(iterations, maximums, 'blue')
+            plot.plotData(iterations, minimums, 'red')
+            plot.plotData(iterations, averages, 'green')
+            plot.plotData(iterations, maximums, 'blue')
+            plot.showLegend(['min', 'avg', 'max'])
 
         return [plot]
 
-    def _displayClassificationScoreConvergence(self, e):
+    def _displayClassificationScores(self, e):
         scoreStatistics = self._readProtocolChainClassificationStatistics('score')
         maximums = [stat['max'] for stat in scoreStatistics]
         minimums = [stat['min'] for stat in scoreStatistics]
         averages = [stat['avg'] for stat in scoreStatistics]
         iterations = list(range(len(averages)))
-
+        
         # Plot the results
         plot = EmPlotter()
         plot.createSubPlot('Score convergence', 'Iteration', 'Score')
-        plot.plotScatter(iterations, minimums, 'red')
-        plot.plotScatter(iterations, averages, 'green')
-        plot.plotScatter(iterations, maximums, 'blue')
+        plot.plotData(iterations, minimums, 'red')
+        plot.plotData(iterations, averages, 'green')
+        plot.plotData(iterations, maximums, 'blue')
+        plot.showLegend(['min', 'avg', 'max'])
 
         return [plot]
+
+    def _displayClassSizeDistribution(self, e):
+        classificationSizes = self._readProtocolChainClassificationSizes()
+        colors = getHexColorList(self.protocol._getClassCount())
+        iterations = list(range(len(classificationSizes)))
+        nParticles = self.protocol._getParticleCount()
+        labels = [f'Class {i}' for i in range(len(colors))]
+        
+        plot = EmPlotter(x=2)
+
+        # Plot the absolute sizes
+        plot.createSubPlot('Class absolute sizes', 'Iteration', 'Particle Count')
+        for cls, color in enumerate(colors):
+            sizes = [x[cls] for x in classificationSizes]
+            plot.plotData(iterations, sizes, color)
+        plot.showLegend(labels)
+
+        # Plot the relative sizes
+        plot.createSubPlot('Class relative sizes', 'Iteration', 'Particle %')
+        for cls, color in enumerate(colors):
+            sizes = [x[cls]/nParticles*100.0 for x in classificationSizes]
+            plot.plotData(iterations, sizes, color)
+        plot.showLegend(labels)
+
+        return [plot]
+
+    def _displayClassDistributionImage(self, e):
+        classification = self._readProtocolChainClassification()
+
+        # Plot classification as an image
+        fig, ax = plt.subplots()
+        plt.colorbar(ax.imshow(np.array(classification).T, origin='lower', aspect='auto', interpolation='none'))
+        ax.set_xlabel('Iteration')
+        ax.set_ylabel('Particle index')
+        ax.set_title('Particle classification evolution')
+        
+        return [fig]
 
     # --------------------------- UTILS functions -----------------------------
     def _getIteration(self):
@@ -203,3 +262,29 @@ class Cistem3DClassificationViewer(ProtocolViewer):
 
         return result
 
+    def _readProtocolChainClassification(self):
+        result = []
+
+        protocols = self._getProtocolChain()
+        for protocol in protocols:
+            # Get the classification column
+            for iter in range(protocol._getCycleCount()):
+                path = protocol._getExtraPath(protocol._getFileName('output_classification', iter=iter))
+                with FullFrealignParFile(path, 'r') as f:
+                    result.append([row['film'] for row in f])
+
+        return result
+
+    def _readProtocolChainClassificationSizes(self):
+        result = []
+
+        nClasses = self.protocol._getClassCount()
+        classifications = self._readProtocolChainClassification()
+
+        for iteration in classifications:
+            data = [0] * nClasses
+            for particleCls in iteration:
+                data[particleCls] += 1
+            result.append(data)
+
+        return result
