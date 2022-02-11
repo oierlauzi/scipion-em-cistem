@@ -94,6 +94,9 @@ class FrealignParFileBase(object):
 
         return result
 
+    def getColumn(self, col):
+        return [row[col] for row in self]
+
     def close(self):
         self._cache = None
         self._file.close()

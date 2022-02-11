@@ -22,6 +22,7 @@
 # *
 # **************************************************************************
 
+from unittest import result
 from pyworkflow.viewer import ProtocolViewer, DESKTOP_TKINTER, WEB_DJANGO
 from pyworkflow.protocol.params import IntParam, LabelParam, BooleanParam
 from pyworkflow.gui.plotter import getHexColorList
@@ -82,16 +83,24 @@ class Cistem3DClassificationViewer(ProtocolViewer):
     
     def _displayScores(self, e):
         iter = self._getIteration()
-        nClasses = self.protocol._getClassCount()
 
-        classification = self._readClassification(iter)
-        scores = self._readRefinementColumn(nClasses, iter, 'score')
-        return self._showClassificationTable(scores, classification, 'Classification')
+        # Read from files
+        ids = self._readClassificationColumn(iter, 'mic_id')
+        classification = self._readClassificationColumn(iter, 'film')
+        scores = self._readRefinementColumn(iter, 'score')
+
+        # Ensemble header and data
+        header = tuple(['Particle ID'] + [f'Class {i} score' for i in range(len(scores))] + ['Classification'])
+        data = list(zip(*([ids] + scores + [classification])))
+
+        # Create a table and show it
+        return [TableView(header, data, None, 'Classification scores')]
     
     def _displayScoreImage(self, e):
         iter = self._getIteration()
-        nClasses = self.protocol._getClassCount()
-        scores = self._readRefinementColumn(nClasses, iter, 'score')
+
+        # Read from files
+        scores = self._readRefinementColumn(iter, 'score')
 
         # Plot scores as an image
         fig, ax = plt.subplots()
@@ -103,7 +112,7 @@ class Cistem3DClassificationViewer(ProtocolViewer):
         return [fig]
 
     def _displayRefinementScores(self, e):
-        scoreStatistics = self._readProtocolChainRefinementStatistics('score')
+        scoreStatistics = self._readProtocolChainRefinementColumnStatistics('score')
         
         plot = EmPlotter(y=self.protocol._getClassCount()) # A column for each class
 
@@ -123,7 +132,7 @@ class Cistem3DClassificationViewer(ProtocolViewer):
         return [plot]
 
     def _displayClassificationScores(self, e):
-        scoreStatistics = self._readProtocolChainClassificationStatistics('score')
+        scoreStatistics = self._readProtocolChainClassificationColumnStatistics('score')
         maximums = [stat['max'] for stat in scoreStatistics]
         minimums = [stat['min'] for stat in scoreStatistics]
         averages = [stat['avg'] for stat in scoreStatistics]
@@ -140,32 +149,43 @@ class Cistem3DClassificationViewer(ProtocolViewer):
         return [plot]
 
     def _displayClassSizeDistribution(self, e):
-        classificationSizes = self._readProtocolChainClassificationSizes()
-        colors = getHexColorList(self.protocol._getClassCount())
-        iterations = list(range(len(classificationSizes)))
+        # Read required data
+        classifications = self._readProtocolChainClassificationColumn('film')
         nParticles = self.protocol._getParticleCount()
-        labels = [f'Class {i}' for i in range(len(colors))]
+        nClasses = self.protocol._getClassCount()
+
+        # Make an histogram for the classification
+        classHist = []
+        for iteration in classifications:
+            data = [0] * nClasses
+            for particleCls in iteration:
+                data[particleCls] += 1
+            classHist.append(data)
         
+        # Start plotting
         plot = EmPlotter(x=2)
+        iterations = list(range(len(classifications)))
+        colors = getHexColorList(self.protocol._getClassCount())
+        labels = [f'Class {i}' for i in range(len(colors))]
 
         # Plot the absolute sizes
         plot.createSubPlot('Class absolute sizes', 'Iteration', 'Particle Count')
         for cls, color in enumerate(colors):
-            sizes = [x[cls] for x in classificationSizes]
+            sizes = [x[cls] for x in classHist]
             plot.plotData(iterations, sizes, color)
         plot.showLegend(labels)
 
         # Plot the relative sizes
         plot.createSubPlot('Class relative sizes', 'Iteration', 'Particle %')
         for cls, color in enumerate(colors):
-            sizes = [x[cls]/nParticles*100.0 for x in classificationSizes]
+            sizes = [x[cls]/nParticles*100.0 for x in classHist]
             plot.plotData(iterations, sizes, color)
         plot.showLegend(labels)
 
         return [plot]
 
     def _displayClassDistributionImage(self, e):
-        classification = self._readProtocolChainClassification()
+        classification = self._readProtocolChainClassificationColumn('film')
 
         # Plot classification as an image
         fig, ax = plt.subplots()
@@ -180,41 +200,6 @@ class Cistem3DClassificationViewer(ProtocolViewer):
     def _getIteration(self):
         return self.protocol._getIter(self.iteration.get())
 
-    def _readClassification(self, iter):
-        result = []
-
-        path = self.protocol._getExtraPath(self.protocol._getFileName('output_classification', iter=iter))
-        with FullFrealignParFile(path, 'r') as f:
-            for row in f:
-                result.append(row['film'])
-
-        return result
-
-    def _readRefinementColumn(self, nClasses, iter, column):
-        result = []
-
-        for cls in range(nClasses):
-            current = []
-
-            path = self.protocol._getExtraPath(self.protocol._getFileName('output_refinement', iter=iter, cls=cls))
-            with FullFrealignParFile(path, 'r') as f:
-                for row in f:
-                    current.append(row[column])
-
-            result.append(current)
-
-        for i in range(1, len(result)):
-            assert(len(result[0]) == len(result[i]))
-
-        return result
-
-    def _showClassificationTable(self, scores, classification, title=None):
-        # Ensemble the header
-        header = tuple([f'Class {i} score' for i in range(len(scores))] + ['Classification'])
-
-        data = list(zip(*(scores + [classification])))
-        return [TableView(header, data, None, title)]
-
     def _getProtocolChain(self):
         result = [self.protocol]
 
@@ -228,50 +213,103 @@ class Cistem3DClassificationViewer(ProtocolViewer):
 
         return result
 
-    def _readProtocolChainRefinementStatistics(self, col):
+    def _readColumn(self, path, col):
+        with FullFrealignParFile(path, 'r') as f:
+            result = f.getColumn(col)
+        
+        return result
+
+    def _readColumnStatistics(self, path, col):
+        with FullFrealignParFile(path, 'r') as f:
+            result = {
+                'max': f.getMax(col),
+                'min': f.getMin(col),
+                'avg': f.getAverage(col)
+            }
+        
+        return result
+
+    def _readClassificationColumn(self, iter, col, prot=None):
+        if prot is None:
+            prot = self.protocol
+
+        path = prot._getExtraPath(prot._getFileName('output_classification', iter=iter))
+        return self._readColumn(path, col)
+    
+    def _readClassificationColumnStatistics(self, iter, col, prot=None):
+        if prot is None:
+            prot = self.protocol
+
+        path = prot._getExtraPath(prot._getFileName('output_classification', iter=iter))
+        return self._readColumnStatistics(path, col)
+
+    def _readProtocolChainClassificationColumn(self, col):
         result = []
 
         protocols = self._getProtocolChain()
         for protocol in protocols:
             for iter in range(protocol._getCycleCount()):
-                result.append([])
-                for cls in range(protocol._getClassCount()):
-                    path = protocol._getExtraPath(protocol._getFileName('output_refinement', iter=iter, cls=cls))
-                    with FullFrealignParFile(path, 'r') as f:
-                        result[-1].append({
-                            'max': f.getMax(col),
-                            'min': f.getMin(col),
-                            'avg': f.getAverage(col)
-                        })
+                result.append(self._readClassificationColumn(iter, col, protocol))
 
         return result
 
-    def _readProtocolChainClassificationStatistics(self, col):
+    def _readProtocolChainClassificationColumnStatistics(self, col):
         result = []
 
         protocols = self._getProtocolChain()
         for protocol in protocols:
             for iter in range(protocol._getCycleCount()):
-                path = protocol._getExtraPath(protocol._getFileName('output_classification', iter=iter))
-                with FullFrealignParFile(path, 'r') as f:
-                    result.append({
-                        'max': f.getMax(col),
-                        'min': f.getMin(col),
-                        'avg': f.getAverage(col)
-                    })
+                result.append(self._readClassificationColumnStatistics(iter, col, protocol))
 
         return result
 
-    def _readProtocolChainClassification(self):
+    def _readRefinementColumn(self, iter, col, prot=None):
+        result = []
+
+        if prot is None:
+            prot = self.protocol
+
+        for cls in range(prot._getClassCount()):
+            path = prot._getExtraPath(prot._getFileName('output_refinement', iter=iter, cls=cls))
+            result.append(self._readColumn(path, col))
+
+        for i in range(1, len(result)):
+            assert(len(result[0]) == len(result[i]))
+
+        return result
+
+    def _readRefinementColumnStatistics(self, iter, col, prot=None):
+        result = []
+        
+        if prot is None:
+            prot = self.protocol
+
+        for cls in range(prot._getClassCount()):
+            path = prot._getExtraPath(prot._getFileName('output_refinement', iter=iter, cls=cls))
+            result.append(self._readColumnStatistics(path, col))
+
+        for i in range(1, len(result)):
+            assert(len(result[0]) == len(result[i]))
+
+        return result
+
+    def _readProtocolChainRefinementColumn(self, col):
         result = []
 
         protocols = self._getProtocolChain()
         for protocol in protocols:
-            # Get the classification column
             for iter in range(protocol._getCycleCount()):
-                path = protocol._getExtraPath(protocol._getFileName('output_classification', iter=iter))
-                with FullFrealignParFile(path, 'r') as f:
-                    result.append([row['film'] for row in f])
+                result.append(self._readRefinementColumn(iter, col, protocol))
+
+        return result
+
+    def _readProtocolChainRefinementColumnStatistics(self, col):
+        result = []
+
+        protocols = self._getProtocolChain()
+        for protocol in protocols:
+            for iter in range(protocol._getCycleCount()):
+                result.append(self._readRefinementColumnStatistics(iter, col, protocol))
 
         return result
 
@@ -279,7 +317,7 @@ class Cistem3DClassificationViewer(ProtocolViewer):
         result = []
 
         nClasses = self.protocol._getClassCount()
-        classifications = self._readProtocolChainClassification()
+        classifications = self._readProtocolChainClassificationColumn('film')
 
         for iteration in classifications:
             data = [0] * nClasses
