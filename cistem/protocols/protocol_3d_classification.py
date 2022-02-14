@@ -422,7 +422,7 @@ class CistemProt3DClassification(ProtClassify3D):
             prerequisites = self._insertMonoBlockSteps(nCycles, nClasses)
 
         # Generate the output
-        self._insertFunctionStep('createOutputStep', nCycles, nClasses, nBlocks, prerequisites=prerequisites)
+        self._insertFunctionStep('createOutputStep', prerequisites=prerequisites)
 
     # --------------------------- STEPS functions -----------------------------
     
@@ -512,10 +512,9 @@ class CistemProt3DClassification(ProtClassify3D):
             self._getExtraPath(self._getFileName('output_statistics', iter=iter, cls=cls))
         )
 
-    def createOutputStep(self, nCycles, nClasses, nBlocks):
-
+    def createOutputStep(self):
         # Create a SetOfClasses3D
-        classes = self._createOutput3dClasses(nClasses, self._getLastIter())
+        classes = self._createOutput3dClasses(self._getLastIter())
         self._defineOutputs(outputClasses=classes)
 
         # Create a SetOfVolumes and define its relations
@@ -1200,7 +1199,8 @@ eof
         )
         classLoader.fillClasses(clsSet)
 
-    def _createOutput3dClasses(self, nClasses, iter):
+    def _createOutput3dClasses(self, iter):
+        nClasses = self._getClassCount()
         classes = self._createSetOfClasses3D(self._getInputParticles())
         self._fillClasses(classes, nClasses, iter)
         return classes

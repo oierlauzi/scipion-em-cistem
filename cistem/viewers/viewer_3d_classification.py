@@ -52,18 +52,30 @@ class Cistem3DClassificationViewer(ProtocolViewer):
                         'so on. Negative numbers refer backwards so that -1'
                         'represents the last one, -2 the penultimate and so on')
         form.addParam('displayClasses', LabelParam, label='Classification')
-        form.addParam('displayScores', LabelParam, label='Scores')
-        form.addParam('displayScoreImage', LabelParam, label='Score Image')
+        form.addParam('displayScores', LabelParam, label='Scores',
+                        help='Shows a table with the scores obtained by each particle in '
+                        'each class and the selected class')
+        form.addParam('displayScoreImage', LabelParam, label='Score Image',
+                        help='Shows the former table as an image, where the colour represents '
+                        'the score')
 
         form.addSection(label='Convergence')
         form.addParam('considerReferences', BooleanParam, label='Consider previous refinement(s)',
                         default=True,
                         help='If a reference refinement is specified for this protocol, this option '
                         'specifies if previous refinement chain is included in the plot')
-        form.addParam('displayRefinementScores', LabelParam, label='Refinement scores')
-        form.addParam('displayClassificationScores', LabelParam, label='Classification scores')
-        form.addParam('displayClassSizeDistribution', LabelParam, label='Class size distribution')
-        form.addParam('displayClassDistributionImage', LabelParam, label='Class distribution image')
+        form.addParam('displayRefinementScores', LabelParam, label='Refinement scores',
+                        help='Shows the evolution of minimum, maximum and average scores of each '
+                        'refinement class across iterations')
+        form.addParam('displayClassificationScores', LabelParam, label='Classification scores',
+                        help='Shows the evolution of minimum, maximum and classification scores  '
+                        'across iterations')
+        form.addParam('displayClassSizeDistribution', LabelParam, label='Class size distribution',
+                        help='Shows the evolution of the particle count of each class across '
+                        'iterations')
+        form.addParam('displayClassDistributionImage', LabelParam, label='Class distribution image',
+                        help='Shows an image where each pixel\'s colour corresponds to the class '
+                        'assigned to a given particle in each iteration')
 
     def _getVisualizeDict(self):
         return {
@@ -78,7 +90,7 @@ class Cistem3DClassificationViewer(ProtocolViewer):
     
     # --------------------------- DEFINE display functions ----------------------
     def _displayClasses(self, e):
-        classes = self.protocol._createOutput3dClasses(self.protocol._getClassCount(), self._getIteration())
+        classes = self.protocol._createOutput3dClasses(self._getIteration())
         return [Classes3DView(self._project, classes.strId(), classes.getFileName())]
     
     def _displayScores(self, e):
