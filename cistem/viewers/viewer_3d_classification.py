@@ -90,7 +90,7 @@ class Cistem3DClassificationViewer(ProtocolViewer):
     
     # --------------------------- DEFINE display functions ----------------------
     def _displayClasses(self, e):
-        classes = self.protocol._createOutput3dClasses(self._getIteration())
+        classes = self.protocol._createOutput3dClasses(self._getIteration(), 'viewer_i' + str(self._getIteration()))
         return [Classes3DView(self._project, classes.strId(), classes.getFileName())]
     
     def _displayScores(self, e):

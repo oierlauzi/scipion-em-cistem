@@ -514,11 +514,11 @@ class CistemProt3DClassification(ProtClassify3D):
 
     def createOutputStep(self):
         # Create a SetOfClasses3D
-        classes = self._createOutput3dClasses(self._getLastIter())
+        classes = self._createOutput3dClasses(self._getLastIter(), 'output')
         self._defineOutputs(outputClasses=classes)
 
         # Create a SetOfVolumes and define its relations
-        volumes = self._createOutputVolumes(classes)
+        volumes = self._createOutputVolumes(classes, 'output')
         self._defineOutputs(outputVolumes=volumes)
 
         # Define source relations
@@ -1199,14 +1199,14 @@ eof
         )
         classLoader.fillClasses(clsSet)
 
-    def _createOutput3dClasses(self, iter):
+    def _createOutput3dClasses(self, iter, suffix=''):
         nClasses = self._getClassCount()
-        classes = self._createSetOfClasses3D(self._getInputParticles())
+        classes = self._createSetOfClasses3D(self._getInputParticles(), suffix)
         self._fillClasses(classes, nClasses, iter)
         return classes
 
-    def _createOutputVolumes(self, classes):
-        volumes = self._createSetOfVolumes()
+    def _createOutputVolumes(self, classes, suffix=''):
+        volumes = self._createSetOfVolumes(suffix)
         volumes.setSamplingRate(classes.getImages().getSamplingRate())
         for cls in classes:
             vol = cls.getRepresentative()
