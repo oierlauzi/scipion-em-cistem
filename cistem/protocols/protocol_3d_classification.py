@@ -407,8 +407,9 @@ class CistemProt3DClassification(ProtClassify3D):
         nCycles = self._getCycleCount()
         nClasses = self._getClassCount()
         nParticles = self._getParticleCount()
-        nWorkers = max(max(int(self.numberOfMpi), int(self.numberOfThreads))-1, 1)
-        self.workDistribution = self._distributeWork(nParticles, nWorkers)
+        nWorkers = max(int(self.numberOfMpi), int(self.numberOfThreads))-1
+        nClassWorkers = max(nWorkers // nClasses, 1)
+        self.workDistribution = self._distributeWork(nParticles, nClassWorkers)
         nBlocks = len(self.workDistribution)
         
         # Initialize required files for the first iteration
@@ -628,6 +629,11 @@ class CistemProt3DClassification(ProtClassify3D):
         return result
 
     def _insertMonoBlockSteps(self, nCycles, nClasses):
+        """ Inserts processing steps, assuming that a single thread will 
+            be working for each class. This allows to combine
+            reconstruct and merge
+        """
+
         # Perform refine, reconstruct and merge steps repeatedly
         reconstructSteps = [len(self._steps)]*nClasses # Initialize to the previous step
         for i in range(nCycles):
@@ -653,6 +659,10 @@ class CistemProt3DClassification(ProtClassify3D):
         return reconstructSteps # Return the completion of all reconstruct steps
 
     def _insertMultiBlockSteps(self, nCycles, nClasses, nJobs):
+        """ Inserts processing steps, assuming that multiple threads will 
+            be working for each class.
+        """
+
         # Perform refine, reconstruct and merge steps repeatedly
         mergeSteps = [len(self._steps)]*nClasses # Initialize to the previous step
         for i in range(nCycles):
