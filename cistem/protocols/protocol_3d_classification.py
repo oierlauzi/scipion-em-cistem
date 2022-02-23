@@ -413,14 +413,14 @@ class CistemProt3DClassification(ProtClassify3D):
         nBlocks = len(self.workDistribution)
         
         # Initialize required files for the first iteration
-        self._insertFunctionStep('convertInputStep', nClasses)
+        convertInputStepIdx = self._insertFunctionStep('convertInputStep', nClasses)
 
         # Execute the pipeline in multiple depending on the parallelization strategy
         prerequisites = []
         if nBlocks > 1:
-            prerequisites = self._insertMultiBlockSteps(nCycles, nClasses, nBlocks)
+            prerequisites = self._insertMultiBlockSteps(nCycles, nClasses, nBlocks, convertInputStepIdx)
         else:
-            prerequisites = self._insertMonoBlockSteps(nCycles, nClasses)
+            prerequisites = self._insertMonoBlockSteps(nCycles, nClasses, convertInputStepIdx)
 
         # Generate the output
         self._insertFunctionStep('createOutputStep', prerequisites=prerequisites)
@@ -628,70 +628,62 @@ class CistemProt3DClassification(ProtClassify3D):
 
         return result
 
-    def _insertMonoBlockSteps(self, nCycles, nClasses):
+    def _insertMonoBlockSteps(self, nCycles, nClasses, convertInputStepIdx):
         """ Inserts processing steps, assuming that a single thread will 
             be working for each class. This allows to combine
             reconstruct and merge
         """
 
         # Perform refine, reconstruct and merge steps repeatedly
-        reconstructSteps = [len(self._steps)]*nClasses # Initialize to the previous step
+        reconstructStepIdxs = [convertInputStepIdx]*nClasses # Initialize to the previous step
         for i in range(nCycles):
             # Refine all classes
-            refineSteps = [0]*nClasses
+            refineStepIdxs = [0]*nClasses
             for j in range(nClasses):
-                prerequisites = [reconstructSteps[j]] # Depend on the creation of the initial volume
-                self._insertFunctionStep('refineStep', i, j, 0, prerequisites=prerequisites)
-                refineSteps[j] = len(self._steps)
+                prerequisites = [reconstructStepIdxs[j]] # Depend on the creation of the initial volume
+                refineStepIdxs[j] = self._insertFunctionStep('refineStep', i, j, 0, prerequisites=prerequisites)
 
             # Classify according to the result of the refinement
-            prerequisites = refineSteps # Depend on all previous refinements referring to this job
-            self._insertFunctionStep('classifyStep', nClasses, 1, i, prerequisites=prerequisites)
-            classifySteps = [len(self._steps)]
+            prerequisites = refineStepIdxs # Depend on all previous refinements referring to this job
+            classifyStepIdx = self._insertFunctionStep('classifyStep', nClasses, 1, i, prerequisites=prerequisites)
 
             # Reconstruct each class
-            reconstructSteps = [0]*nClasses
             for j in range(nClasses):
-                prerequisites = classifySteps # Depend on the classification
-                self._insertFunctionStep('reconstructAllStep', i, j, prerequisites=prerequisites)
-                reconstructSteps[j] = len(self._steps)
+                prerequisites = [classifyStepIdx] # Depend on the classification
+                reconstructStepIdxs[j] = self._insertFunctionStep('reconstructAllStep', i, j, prerequisites=prerequisites)
 
-        return reconstructSteps # Return the completion of all reconstruct steps
+        return reconstructStepIdxs # Return the completion of all reconstruct steps
 
-    def _insertMultiBlockSteps(self, nCycles, nClasses, nJobs):
+    def _insertMultiBlockSteps(self, nCycles, nClasses, nJobs, convertInputStepIdx):
         """ Inserts processing steps, assuming that multiple threads will 
             be working for each class.
         """
 
         # Perform refine, reconstruct and merge steps repeatedly
-        mergeSteps = [len(self._steps)]*nClasses # Initialize to the previous step
+        mergeStepIdxs = [convertInputStepIdx]*nClasses # Initialize to the previous step
         for i in range(nCycles):
             # Refine all classes
-            refineSteps = [[0]*nJobs for _ in range(nClasses)]
+            refineStepIdxs = [[0]*nJobs for _ in range(nClasses)]
             for j in range(nClasses):
                 for k in range(nJobs):
-                    prerequisites = [mergeSteps[j]] # Depend on the creation of the initial volume
-                    self._insertFunctionStep('refineStep', i, j, k, prerequisites=prerequisites)
-                    refineSteps[j][k] = len(self._steps)
+                    prerequisites = [mergeStepIdxs[j]] # Depend on the creation of the initial volume
+                    refineStepIdxs[j][k] = self._insertFunctionStep('refineStep', i, j, k, prerequisites=prerequisites)
 
             # Classify according to the result of the refinement
-            prerequisites = [item for sublist in refineSteps for item in sublist] # All refinements
-            self._insertFunctionStep('classifyStep', nClasses, nJobs, i, prerequisites=prerequisites)
-            classifySteps = [len(self._steps)]
+            prerequisites = [item for sublist in refineStepIdxs for item in sublist] # All refinements
+            classifyStepIdx = self._insertFunctionStep('classifyStep', nClasses, nJobs, i, prerequisites=prerequisites)
 
             # Reconstruct each class
             for j in range(nClasses):
-                reconstructSteps = [0]*nJobs
+                reconstructStepIdxs = [0]*nJobs
                 for k in range(nJobs):
-                    prerequisites = classifySteps # Depend on the classification
-                    self._insertFunctionStep('reconstructStep', i, j, k, prerequisites=prerequisites)
-                    reconstructSteps[k] = len(self._steps)
+                    prerequisites = [classifyStepIdx] # Depend on the classification
+                    reconstructStepIdxs[k] = self._insertFunctionStep('reconstructStep', i, j, k, prerequisites=prerequisites)
                 
-                prerequisites=reconstructSteps # Depend on all partial reconstructions of this class
-                self._insertFunctionStep('mergeStep', nJobs, i, j, prerequisites=prerequisites)
-                mergeSteps[j] = len(self._steps)
+                prerequisites=reconstructStepIdxs # Depend on all partial reconstructions of this class
+                mergeStepIdxs[j] = self._insertFunctionStep('mergeStep', nJobs, i, j, prerequisites=prerequisites)
 
-        return mergeSteps # Return the completion of all merge steps
+        return mergeStepIdxs # Return the completion of all merge steps
 
 
     def _createWorkingDir(self):
