@@ -1044,7 +1044,11 @@ eof
                 f.writeHeader()
                 for refinementRow, classificationRow in zip(refinement[cls], classification):
                     row = refinementRow.copy()
-                    row['film'] = 1 if classificationRow['film'] == cls else -1 # Selectively enable
+                    # Conditionally enable
+                    if classificationRow['film'] != cls:
+                        row['film'] = -1
+                        row['score'] = 0.0
+
                     row['magnification'] = 0.0
                     row['change'] = 0.0
                     f.writeRow(row)
